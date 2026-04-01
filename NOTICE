@@ -1,0 +1,12 @@
+DolanClaw — 国产大模型统一调度平台
+Copyright 2024 DolanClaw Contributors
+
+本项目基于以下开源项目的架构参考开发：
+
+- Claude Code (https://github.com/anthropics/claude-code)
+  Copyright (c) Anthropic, PBC
+  Licensed under Apache License 2.0
+
+声明：
+本项目与 Anthropic 公司无任何关联，不包含任何 Anthropic 原始代码。
+Web UI 界面和国产大模型调度层均为独立开发。

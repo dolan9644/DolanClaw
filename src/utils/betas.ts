@@ -232,6 +232,11 @@ export function shouldUseGlobalCacheScope(): boolean {
 }
 
 export const getAllModelBetas = memoize((model: string): string[] => {
+  // OpenAI-compatible providers don't understand Anthropic beta headers
+  if (getAPIProvider() === 'openai-compat') {
+    return []
+  }
+
   const betaHeaders = []
   const isHaiku = getCanonicalName(model).includes('haiku')
   const provider = getAPIProvider()

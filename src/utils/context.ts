@@ -4,6 +4,7 @@ import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
 import { getCanonicalName } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
+import { getAPIProvider } from './model/providers.js'
 
 // Model context window size (200k tokens for all models right now)
 export const MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
@@ -150,6 +151,18 @@ export function getModelMaxOutputTokens(model: string): {
   default: number
   upperLimit: number
 } {
+  // OpenAI-compatible models: read from the model registry
+  if (getAPIProvider() === 'openai-compat') {
+    const { getOpenAIModelConfig } = require('../model/openaiModels.js') as typeof import('../model/openaiModels.js')
+    const config = getOpenAIModelConfig(model)
+    if (config) {
+      return {
+        default: Math.min(config.maxOutputTokens, 8192),
+        upperLimit: config.maxOutputTokens,
+      }
+    }
+  }
+
   let defaultTokens: number
   let upperLimit: number
 

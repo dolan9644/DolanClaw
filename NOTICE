@@ -3,7 +3,7 @@ Copyright 2024 DolanClaw Contributors
 
 本项目基于以下开源项目的架构参考开发：
 
-- Claude Code (https://github.com/anthropics/claude-code)
+- Claude Code Best (https://github.com/claude-code-best/claude-code)
   Copyright (c) Anthropic, PBC
   Licensed under Apache License 2.0
 

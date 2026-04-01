@@ -15,7 +15,7 @@
 ---
 
 > **声明**：本项目与 Anthropic 公司无任何关联，不包含任何 Anthropic 原始代码。
-> 本项目基于 [Claude Code Best](https://github.com/anthropics/claude-code) 的开源架构，
+> 本项目基于 [Claude Code Best](https://github.com/claude-code-best/claude-code) 的开源架构，
 > 独立开发了面向国产大模型的 Web UI 界面和调度层。
 
 ---
@@ -186,7 +186,7 @@ npm run build        # 生产构建
 
 ## 致谢
 
-- [Claude Code](https://github.com/anthropics/claude-code) — 原始架构参考
+- [Claude Code Best](https://github.com/claude-code-best/claude-code) — 原始架构参考
 - [Outfit](https://fonts.google.com/specimen/Outfit) — UI 字体
 - [JetBrains Mono](https://www.jetbrains.com/mono/) — 等宽代码字体
 

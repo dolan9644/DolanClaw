@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="#什么是-dolanclaw">什么是 DolanClaw</a> •
+  <a href="docs/USER_GUIDE.md">使用指南</a> •
   <a href="#功能概览">功能概览</a> •
   <a href="#快速开始">快速开始</a> •
   <a href="#mcp-工具生态">MCP 工具生态</a> •

@@ -151,28 +151,72 @@ function EnvKeyModal({
   )
 }
 
+// ─── Skill Pack Details Modal ───────────────────────
+
+function SkillPackDetailsModal({
+  pack,
+  isInstalling,
+  onInstall,
+  onUninstall,
+  onClose,
+}: {
+  pack: SkillPack
+  isInstalling: boolean
+  onInstall: () => void
+  onUninstall: () => void
+  onClose: () => void
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
+        <div className="page-header" style={{ padding: 0, marginBottom: 16, borderBottom: 'none' }}>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{pack.icon} {pack.name}</h3>
+        </div>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', margin: '0 0 20px', lineHeight: 1.6 }}>
+          {pack.description}
+        </p>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+          {pack.agents && <span className="page-badge">{pack.agents.length} Agents</span>}
+          {pack.skills && <span className="page-badge">{pack.skills.length} Skills</span>}
+          {pack.commands && <span className="page-badge">{pack.commands.length} Commands</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onClose} style={{ fontSize: 13 }}>关闭</button>
+          {!pack.installed ? (
+            <button className="btn-primary" onClick={onInstall} disabled={isInstalling}>
+              {isInstalling ? '安装中...' : '安装技能包'}
+            </button>
+          ) : (
+            <button className="btn" onClick={onUninstall} style={{ color: '#ef4444' }} disabled={isInstalling}>
+              {isInstalling ? '卸载中...' : '卸载'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ─────────────────────────────────
 
 export function RegistryPage() {
   const [data, setData] = useState<RegistryData | null>(null)
   const [packData, setPackData] = useState<SkillPackData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'mcp' | 'skills' | 'packs'>('packs')
+  const [activeTab, setActiveTab] = useState<'packs' | 'mcp' | 'skills'>('packs')
   const [activeCategory, setActiveCategory] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [installing, setInstalling] = useState<string | null>(null)
   const [envModal, setEnvModal] = useState<McpServerEntry | null>(null)
+  const [selectedPack, setSelectedPack] = useState<SkillPack | null>(null)
 
   const fetchRegistry = useCallback(async () => {
-    // Fetch registry data (independent of skill packs)
     try {
       const regRes = await fetch('/api/registry')
       if (regRes.ok) {
         const regJson = await regRes.json()
         setData(regJson)
       } else {
-        console.warn('Registry API returned', regRes.status)
-        // Provide empty fallback so UI still renders
         setData({ mcpServers: [], skills: [], categories: [] })
       }
     } catch (err) {
@@ -180,16 +224,13 @@ export function RegistryPage() {
       setData({ mcpServers: [], skills: [], categories: [] })
     }
 
-    // Fetch skill pack data (independent)
     try {
       const packRes = await fetch('/api/skill-packs')
       if (packRes.ok) {
         const packJson = await packRes.json()
         setPackData(packJson)
       }
-    } catch {
-      // Skill packs API not available — that's OK
-    }
+    } catch {}
 
     setLoading(false)
   }, [])
@@ -242,6 +283,7 @@ export function RegistryPage() {
         body: JSON.stringify({ packId }),
       })
       await fetchRegistry()
+      setSelectedPack(null)
     } catch (err) {
       console.error('Install failed:', err)
     } finally {
@@ -258,6 +300,7 @@ export function RegistryPage() {
         body: JSON.stringify({ packId }),
       })
       await fetchRegistry()
+      setSelectedPack(null)
     } catch (err) {
       console.error('Uninstall failed:', err)
     } finally {
@@ -305,7 +348,6 @@ export function RegistryPage() {
     }
   }, [installMcp])
 
-  // ── Loading State ──
   if (loading) {
     return (
       <div className="page">
@@ -317,7 +359,6 @@ export function RegistryPage() {
     )
   }
 
-  // ── Error State ──
   if (!data) {
     return (
       <div className="page">
@@ -346,7 +387,6 @@ export function RegistryPage() {
 
   return (
     <div className="page">
-      {/* ── Header ── */}
       <div className="page-header">
         <h1 className="page-title">扩展市场</h1>
         <div className="page-header-actions">
@@ -362,7 +402,6 @@ export function RegistryPage() {
         </div>
       </div>
 
-      {/* ── Toolbar: Tabs + Search ── */}
       <div className="page-toolbar">
         <input
           type="text"
@@ -393,7 +432,6 @@ export function RegistryPage() {
         </div>
       </div>
 
-      {/* ── Category Filter (MCP only) ── */}
       {activeTab === 'mcp' && (
         <div className="filter-tabs" style={{ padding: '0 24px 16px', gap: 4 }}>
           {allCategories.map(cat => (
@@ -409,24 +447,16 @@ export function RegistryPage() {
         </div>
       )}
 
-      {/* ── Body ── */}
       <div className="page-body">
-
-        {/* ── Skill Packs Grid ── */}
         {activeTab === 'packs' && packData && (
           <>
-            {/* Pack cards */}
             <div style={{ padding: '0 24px 12px', fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>
               📦 技能包 — 一键安装全套组件
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
-                来自 <a href="https://github.com/affaan-m/everything-claude-code" target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>Everything Claude Code</a>
-              </span>
             </div>
             <div className="tools-grid">
               {packData.packs
                 .filter(p => !searchQuery || p.name.includes(searchQuery) || p.description.includes(searchQuery))
                 .map(pack => {
-                const isInstalling = installing === pack.id
                 return (
                   <div key={pack.id} className={`tool-card ${pack.installed ? 'tool-card-active' : ''}`}>
                     <div className="tool-card-header">
@@ -441,36 +471,32 @@ export function RegistryPage() {
                     </div>
                     <div className="tool-card-desc">{pack.description}</div>
                     <div className="tool-card-footer" style={{ gap: 4 }}>
-                      {pack.agents && pack.agents.length > 0 && (
-                        <span className="tool-card-category">{pack.agents.length} agent</span>
-                      )}
-                      {pack.skills && pack.skills.length > 0 && (
-                        <span className="tool-card-category">{pack.skills.length} skill</span>
-                      )}
-                      {pack.commands && pack.commands.length > 0 && (
-                        <span className="tool-card-category">{pack.commands.length} cmd</span>
-                      )}
-                      {pack.rules && pack.rules.length > 0 && (
-                        <span className="tool-card-category">{pack.rules.length} rule</span>
-                      )}
+                      <span className="tool-card-category">{pack.componentCount} 组件</span>
                       <span style={{ flex: 1 }} />
+                      <button
+                        className="btn"
+                        style={{ fontSize: 11, padding: '3px 8px', border: '1px solid var(--border)' }}
+                        onClick={() => setSelectedPack(pack)}
+                      >
+                        详情
+                      </button>
                       {!pack.installed ? (
                         <button
                           className="btn-primary"
                           style={{ fontSize: 11, padding: '3px 12px', whiteSpace: 'nowrap' }}
-                          disabled={isInstalling}
+                          disabled={installing === pack.id}
                           onClick={() => installPack(pack.id)}
                         >
-                          {isInstalling ? '安装中...' : '安装'}
+                          {installing === pack.id ? '安装中...' : '安装'}
                         </button>
                       ) : (
                         <button
                           className="btn"
                           style={{ fontSize: 11, padding: '3px 10px', color: '#ef4444' }}
-                          disabled={isInstalling}
+                          disabled={installing === pack.id}
                           onClick={() => uninstallPack(pack.id)}
                         >
-                          {isInstalling ? '卸载中...' : '卸载'}
+                          {installing === pack.id ? '卸载中...' : '卸载'}
                         </button>
                       )}
                     </div>
@@ -479,7 +505,6 @@ export function RegistryPage() {
               })}
             </div>
 
-            {/* Individual skills */}
             <div style={{ padding: '20px 24px 12px', fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>
               ⭐ 热门单品 — 按需安装
             </div>
@@ -535,7 +560,6 @@ export function RegistryPage() {
           </>
         )}
 
-        {/* ── MCP Server Grid ── */}
         {activeTab === 'mcp' && (
           <div className="tools-grid">
             {filteredMcp.map(server => {
@@ -548,7 +572,6 @@ export function RegistryPage() {
                   key={server.name}
                   className={`tool-card ${server.installed ? 'tool-card-active' : ''}`}
                 >
-                  {/* Card Header */}
                   <div className="tool-card-header">
                     <span className="tool-card-icon" style={{ color: server.connected ? '#10b981' : '#6b7280' }}>
                       {server.connected ? '◉' : server.installed ? '◎' : '○'}
@@ -562,10 +585,8 @@ export function RegistryPage() {
                     </span>
                   </div>
 
-                  {/* Description */}
                   <div className="tool-card-desc">{server.description}</div>
 
-                  {/* Footer — row 1: meta */}
                   <div className="tool-card-footer" style={{ flexWrap: 'nowrap' }}>
                     <span className="tool-card-category">{server.category}</span>
                     {server.official && (
@@ -588,7 +609,6 @@ export function RegistryPage() {
                       <span style={{ fontSize: 11, color: '#10b981', fontWeight: 500, flexShrink: 0 }}>✓</span>
                     )}
                   </div>
-                  {/* Footer — row 2: env key (only if needed) */}
                   {server.envRequired && (
                     <div style={{ marginTop: 6 }}>
                       <span style={{
@@ -674,6 +694,17 @@ export function RegistryPage() {
             setEnvModal(null)
           }}
           onCancel={() => setEnvModal(null)}
+        />
+      )}
+
+      {/* ── Skill Pack Details Modal ── */}
+      {selectedPack && (
+        <SkillPackDetailsModal
+          pack={selectedPack}
+          isInstalling={installing === selectedPack.id}
+          onInstall={() => installPack(selectedPack.id)}
+          onUninstall={() => uninstallPack(selectedPack.id)}
+          onClose={() => setSelectedPack(null)}
         />
       )}
     </div>

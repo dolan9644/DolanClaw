@@ -1740,22 +1740,26 @@ async function handleApiRequest(
 
     function isPackInstalled(pack: SkillPackDef): boolean {
       const claudeDir = join(workingDirectory, '.claude')
-      // Check if at least one component from each non-empty category exists
-      if (pack.agents?.length) {
-        const first = join(claudeDir, 'agents', pack.agents[0])
-        if (!existsSync(first)) return false
+      // Check if ALL components defined in the pack exist
+      if (pack.agents) {
+        for (const f of pack.agents) {
+          if (!existsSync(join(claudeDir, 'agents', f))) return false
+        }
       }
-      if (pack.skills?.length) {
-        const first = join(claudeDir, 'skills', pack.skills[0])
-        if (!existsSync(first)) return false
+      if (pack.skills) {
+        for (const s of pack.skills) {
+          if (!existsSync(join(claudeDir, 'skills', s))) return false
+        }
       }
-      if (pack.commands?.length) {
-        const first = join(claudeDir, 'commands', pack.commands[0])
-        if (!existsSync(first)) return false
+      if (pack.commands) {
+        for (const f of pack.commands) {
+          if (!existsSync(join(claudeDir, 'commands', f))) return false
+        }
       }
-      if (pack.rules?.length) {
-        const first = join(claudeDir, 'rules', pack.rules[0])
-        if (!existsSync(first)) return false
+      if (pack.rules) {
+        for (const r of pack.rules) {
+          if (!existsSync(join(claudeDir, 'rules', r))) return false
+        }
       }
       return true
     }

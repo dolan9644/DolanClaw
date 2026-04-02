@@ -164,22 +164,34 @@ export function RegistryPage() {
   const [envModal, setEnvModal] = useState<McpServerEntry | null>(null)
 
   const fetchRegistry = useCallback(async () => {
+    // Fetch registry data (independent of skill packs)
     try {
-      const [regRes, packRes] = await Promise.all([
-        fetch('/api/registry'),
-        fetch('/api/skill-packs'),
-      ])
-      const regJson = await regRes.json()
-      setData(regJson)
-      try {
-        const packJson = await packRes.json()
-        setPackData(packJson)
-      } catch { /* skill packs might not be available */ }
+      const regRes = await fetch('/api/registry')
+      if (regRes.ok) {
+        const regJson = await regRes.json()
+        setData(regJson)
+      } else {
+        console.warn('Registry API returned', regRes.status)
+        // Provide empty fallback so UI still renders
+        setData({ mcpServers: [], skills: [], categories: [] })
+      }
     } catch (err) {
       console.error('Failed to fetch registry:', err)
-    } finally {
-      setLoading(false)
+      setData({ mcpServers: [], skills: [], categories: [] })
     }
+
+    // Fetch skill pack data (independent)
+    try {
+      const packRes = await fetch('/api/skill-packs')
+      if (packRes.ok) {
+        const packJson = await packRes.json()
+        setPackData(packJson)
+      }
+    } catch {
+      // Skill packs API not available — that's OK
+    }
+
+    setLoading(false)
   }, [])
 
   useEffect(() => { fetchRegistry() }, [fetchRegistry])

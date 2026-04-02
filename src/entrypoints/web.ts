@@ -449,6 +449,11 @@ async function handleApiRequest(
     const rateLimitError = checkRateLimit(req, corsHeaders)
     if (rateLimitError) return rateLimitError
 
+    // GET /api/health — Simple health check for restart polling
+    if (path === '/api/health' && method === 'GET') {
+      return Response.json({ ok: true, uptime: process.uptime() }, { headers: corsHeaders })
+    }
+
     // POST /api/restart — Graceful server restart
     if (path === '/api/restart' && method === 'POST') {
       console.log('\n  🔄 收到重启请求，正在重启服务器...')

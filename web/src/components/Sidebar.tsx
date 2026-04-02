@@ -280,6 +280,8 @@ export function Sidebar({
   const [workspacePath, setWorkspacePath] = useState('')
   const [workspaceName, setWorkspaceName] = useState('...')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [restartState, setRestartState] = useState<'idle' | 'confirming' | 'restarting' | 'done' | 'failed'>('idle')
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Fetch current workspace on mount
   useEffect(() => {
@@ -477,56 +479,57 @@ export function Sidebar({
             <button
               className="sidebar-restart-btn"
               title="重启后端服务"
+              style={{
+                background: restartState === 'confirming' ? 'rgba(239,68,68,0.15)' : undefined,
+                color: restartState === 'confirming' ? '#ef4444' : undefined,
+                minWidth: restartState === 'confirming' ? 50 : undefined,
+                fontSize: restartState === 'confirming' ? 9 : undefined,
+              }}
+              disabled={restartState === 'restarting'}
               onClick={async () => {
-                if (!confirm('确定重启后端服务器？当前进行中的请求会中断。')) return
-
-                // Create a visible overlay to show restart progress
-                const overlay = document.createElement('div')
-                overlay.id = 'restart-overlay'
-                overlay.style.cssText = `
-                  position: fixed; inset: 0; z-index: 99999;
-                  background: rgba(0,0,0,0.75); backdrop-filter: blur(8px);
-                  display: flex; flex-direction: column;
-                  align-items: center; justify-content: center;
-                  color: #fff; font-family: var(--font-sans, system-ui);
-                `
-                overlay.innerHTML = `
-                  <div style="font-size: 36px; margin-bottom: 16px; animation: spin 1s linear infinite">🔄</div>
-                  <div style="font-size: 16px; font-weight: 600; margin-bottom: 8px">正在重启后端服务...</div>
-                  <div id="restart-status" style="font-size: 13px; color: rgba(255,255,255,0.6)">发送重启请求中</div>
-                  <style>@keyframes spin { to { transform: rotate(360deg) } }</style>
-                `
-                document.body.appendChild(overlay)
-
-                const statusEl = document.getElementById('restart-status')
-
-                try {
-                  await fetch('/api/restart', { method: 'POST' })
-                } catch { /* expected — server is restarting */ }
-
-                if (statusEl) statusEl.textContent = '等待服务恢复...'
-
-                // Poll until backend is back (max 15s)
-                let recovered = false
-                for (let i = 0; i < 30; i++) {
-                  await new Promise(r => setTimeout(r, 500))
-                  try {
-                    const res = await fetch('/api/health', { signal: AbortSignal.timeout(2000) })
-                    if (res.ok) { recovered = true; break }
-                  } catch { /* still restarting */ }
-                  if (statusEl) statusEl.textContent = `等待服务恢复... (${Math.ceil((i + 1) / 2)}s)`
+                // Step 1: First click → show confirmation text
+                if (restartState === 'idle') {
+                  setRestartState('confirming')
+                  // Auto-cancel after 3 seconds
+                  if (restartTimerRef.current) clearTimeout(restartTimerRef.current)
+                  restartTimerRef.current = setTimeout(() => setRestartState('idle'), 3000)
+                  return
                 }
 
-                if (recovered) {
-                  if (statusEl) statusEl.textContent = '✅ 服务已恢复，正在刷新...'
-                  setTimeout(() => window.location.reload(), 800)
-                } else {
-                  if (statusEl) statusEl.textContent = '⚠️ 服务未响应，请手动刷新'
-                  setTimeout(() => overlay.remove(), 3000)
+                // Step 2: Second click → actually restart
+                if (restartState === 'confirming') {
+                  if (restartTimerRef.current) clearTimeout(restartTimerRef.current)
+                  setRestartState('restarting')
+
+                  try {
+                    await fetch('/api/restart', { method: 'POST' })
+                  } catch { /* expected — server is restarting */ }
+
+                  // Poll until backend is back (max 15s)
+                  let recovered = false
+                  for (let i = 0; i < 30; i++) {
+                    await new Promise(r => setTimeout(r, 500))
+                    try {
+                      const res = await fetch('/api/health', { signal: AbortSignal.timeout(2000) })
+                      if (res.ok) { recovered = true; break }
+                    } catch { /* still restarting */ }
+                  }
+
+                  if (recovered) {
+                    setRestartState('done')
+                    setTimeout(() => window.location.reload(), 600)
+                  } else {
+                    setRestartState('failed')
+                    setTimeout(() => setRestartState('idle'), 3000)
+                  }
                 }
               }}
             >
-              🔄
+              {restartState === 'idle' && '🔄'}
+              {restartState === 'confirming' && '确定?'}
+              {restartState === 'restarting' && '⏳'}
+              {restartState === 'done' && '✅'}
+              {restartState === 'failed' && '❌'}
             </button>
             <kbd style={{
               padding: '1px 4px', fontSize: '9px', fontFamily: 'var(--font-mono)',

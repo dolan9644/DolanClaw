@@ -877,6 +877,26 @@ a:hover { color: var(--accent-hover); }
 .sidebar-status-dot.online { background: var(--success); }
 .sidebar-status-dot.offline { background: var(--error); }
 
+/* Restart Button */
+.sidebar-restart-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  padding: 1px 4px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  line-height: 1;
+}
+.sidebar-restart-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  transform: rotate(90deg);
+}
+.sidebar-restart-btn:active {
+  transform: rotate(180deg);
+}
+
 /* Sidebar Context Window Bar */
 .sidebar-footer .context-bar {
   margin-top: 10px;

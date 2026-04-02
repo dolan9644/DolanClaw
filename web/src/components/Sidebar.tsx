@@ -468,12 +468,26 @@ export function Sidebar({
           </div>
         </div>
 
-        <div className="sidebar-status">
+      <div className="sidebar-status">
           <span>
             <span className="sidebar-status-dot online" />
             已就绪
           </span>
           <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button
+              className="sidebar-restart-btn"
+              title="重启后端服务"
+              onClick={async () => {
+                if (!confirm('确定重启后端服务器？当前进行中的请求会中断。')) return
+                try {
+                  await fetch('/api/restart', { method: 'POST' })
+                  // Brief delay then reload to reconnect
+                  setTimeout(() => window.location.reload(), 2500)
+                } catch { /* server is restarting */ }
+              }}
+            >
+              🔄
+            </button>
             <kbd style={{
               padding: '1px 4px', fontSize: '9px', fontFamily: 'var(--font-mono)',
               background: 'var(--bg-tertiary)', border: '1px solid var(--border)',

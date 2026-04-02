@@ -48,6 +48,9 @@ const mcpManager = McpManager.getInstance()
 const DEFAULT_PORT = 3000
 const MAX_TOOL_TURNS = 25 // Prevent infinite tool loops
 
+// Server instance reference (for graceful restart)
+let serverInstance: ReturnType<typeof Bun.serve> | null = null
+
 // ─── Workspace (mutable working directory) ──────────────
 let workingDirectory = process.cwd()
 
@@ -445,6 +448,35 @@ async function handleApiRequest(
     // Rate limit check
     const rateLimitError = checkRateLimit(req, corsHeaders)
     if (rateLimitError) return rateLimitError
+
+    // POST /api/restart — Graceful server restart
+    if (path === '/api/restart' && method === 'POST') {
+      console.log('\n  🔄 收到重启请求，正在重启服务器...')
+      const response = Response.json({ ok: true, message: '服务器正在重启...' }, { headers: corsHeaders })
+
+      // Schedule restart after response is sent
+      setTimeout(() => {
+        // 1. Stop current server to free the port
+        if (serverInstance) {
+          serverInstance.stop()
+        }
+
+        // 2. Spawn a new process with the same arguments
+        const args = ['bun', 'run', import.meta.path, ...process.argv.slice(2)]
+        const child = Bun.spawn(args, {
+          stdout: 'inherit',
+          stderr: 'inherit',
+          stdin: 'ignore',
+        })
+        child.unref()
+
+        // 3. Exit current process
+        console.log('  ✅ 新进程已启动，旧进程退出\n')
+        process.exit(0)
+      }, 500)
+
+      return response
+    }
 
     // POST /api/chat — Streaming chat with agentic tool loop
     if (path === '/api/chat' && method === 'POST') {
@@ -3146,6 +3178,9 @@ export function startWebServer(port: number = DEFAULT_PORT) {
       return new Response('Not Found', { status: 404 })
     },
   })
+
+  // Store server reference for restart capability
+  serverInstance = server
 
   console.log(`  服务器运行中: http://localhost:${server.port}\n`)
   return server

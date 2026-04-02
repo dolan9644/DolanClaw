@@ -332,6 +332,7 @@ $ARGUMENTS
 ## 致谢
 
 - [Claude Code Best](https://github.com/claude-code-best/claude-code) — 项目灵感来源，感谢开源社区的贡献
+- [Everything Claude Code](https://github.com/affaan-m/everything-claude-code) — 技能包商店集成了 ECC 的 36 个专家代理、151 个工作流技能和多语言编码规范（MIT 许可证，© 2026 Affaan Mustafa）。感谢 Affaan Mustafa 和所有 ECC 贡献者为 AI 编程社区做出的贡献
 - [Model Context Protocol](https://modelcontextprotocol.io/) — MCP 开放协议
 - [Outfit](https://fonts.google.com/specimen/Outfit) — UI 字体
 - [JetBrains Mono](https://www.jetbrains.com/mono/) — 等宽代码字体

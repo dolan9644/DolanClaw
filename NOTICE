@@ -7,6 +7,10 @@ Copyright 2024 DolanClaw Contributors
   Copyright (c) Anthropic, PBC
   Licensed under Apache License 2.0
 
+- Everything Claude Code (https://github.com/affaan-m/everything-claude-code)
+  Copyright (c) 2026 Affaan Mustafa
+  Licensed under MIT License
+
 声明：
 本项目与 Anthropic 公司无任何关联，不包含任何 Anthropic 原始代码。
 Web UI 界面和国产大模型调度层均为独立开发。

@@ -1242,24 +1242,20 @@ async function handleApiRequest(
 
     // ─── Hooks API ──────────────────────────────────────
 
-    // GET /api/hooks — Read hooks configuration
+    // GET /api/hooks — Read hooks configuration (all 8 event types)
     if (path === '/api/hooks' && method === 'GET') {
-      const hooksPaths = [
-        join(workingDirectory, '.claude', 'hooks.json'),
-        join(process.env.HOME || '~', '.claude', 'hooks.json'),
-      ]
-      let hooks = { PreToolUse: [] as Array<{ matcher: string; command: string }>, PostToolUse: [] as Array<{ matcher: string; command: string }> }
-      let source = 'none'
-      for (const hp of hooksPaths) {
-        if (existsSync(hp)) {
-          try {
-            hooks = JSON.parse(readFileSync(hp, 'utf-8'))
-            source = hp
-            break
-          } catch {}
-        }
+      const hooks = loadHooksConfig()
+      const eventMetadata = {
+        PreToolUse:       { summary: '工具执行前', description: 'Exit code 2 = 拦截工具调用' },
+        PostToolUse:      { summary: '工具执行后', description: 'Exit code 2 = 将 stderr 传递给模型' },
+        SessionStart:     { summary: '会话开始时', description: 'stdout 作为系统提示注入' },
+        Stop:             { summary: 'AI 回复完成前', description: 'Exit code 2 = 继续对话' },
+        UserPromptSubmit: { summary: '用户提交 Prompt 时', description: 'Exit code 2 = 阻止处理' },
+        PreCompact:       { summary: '上下文压缩前', description: 'Exit code 2 = 阻止压缩' },
+        SubagentStart:    { summary: '子代理开始时', description: 'stdout 作为子代理上下文' },
+        SubagentStop:     { summary: '子代理完成时', description: 'Exit code 2 = 子代理继续执行' },
       }
-      return Response.json({ hooks, source }, { headers: corsHeaders })
+      return Response.json({ hooks: hooks.config, source: hooks.source, eventMetadata }, { headers: corsHeaders })
     }
 
     // PUT /api/hooks — Save hooks configuration
@@ -2389,6 +2385,17 @@ ${toolDescriptions}
 
   const startTime = Date.now()
 
+  // ── UserPromptSubmit hook ──
+  const promptHookResult = await executeHooks('UserPromptSubmit', '', {
+    HOOK_USER_PROMPT: userMessage,
+  }, { blocking: true })
+  if (promptHookResult.blocked) {
+    return Response.json(
+      { error: `[Hook] 用户 Prompt 已被拦截: ${promptHookResult.output}` },
+      { status: 403, headers: corsHeaders },
+    )
+  }
+
   // Create SSE response with agentic tool loop
   const stream = new ReadableStream({
     async start(controller) {
@@ -2400,6 +2407,15 @@ ${toolDescriptions}
       }
 
       let turnCount = 0
+
+      // ── SessionStart hook (first message in this stream) ──
+      const sessionHook = await executeHooks('SessionStart', 'startup', {
+        HOOK_SESSION_SOURCE: 'startup',
+      }, { blocking: true })
+      // Inject SessionStart hook output into system prompt if any
+      if (sessionHook.output) {
+        conversationMessages[0].content += `\n\n<hook_context>\n${sessionHook.output}\n</hook_context>`
+      }
 
       try {
         // ═══════════════════════════════════════════════════════
@@ -2644,6 +2660,16 @@ ${toolDescriptions}
 
           if (toolCallsFromLLM.length === 0) {
             // No tool calls — turn complete
+            // ── Stop hook ──
+            const stopResult = await executeHooks('Stop', '', {
+              HOOK_ASSISTANT_RESPONSE: assistantContent.slice(0, 10000),
+            }, { blocking: true })
+            if (stopResult.blocked) {
+              // Stop hook says "keep going" — inject feedback and continue
+              conversationMessages.push({ role: 'assistant', content: assistantContent })
+              conversationMessages.push({ role: 'user', content: `[Stop Hook] ${stopResult.output}` })
+              continue
+            }
             break
           }
 
@@ -2814,33 +2840,125 @@ ${toolDescriptions}
 // ─── Tool Usage Stats ───────────────────────────────────
 const toolUsageStats: Record<string, number> = {}
 
-// PostToolUse hook runner
+// ─── Hooks System (8 event types) ──────────────────────────
+// Supports both flat format { matcher, command } and ECC nested format { matcher, hooks: [{ type, command }], id }
+
+type HookEntry = {
+  matcher?: string
+  command?: string           // flat format
+  hooks?: Array<{ type: string; command: string }>  // ECC nested format
+  id?: string
+  description?: string
+}
+
+type HooksConfig = {
+  PreToolUse?: HookEntry[]
+  PostToolUse?: HookEntry[]
+  SessionStart?: HookEntry[]
+  Stop?: HookEntry[]
+  UserPromptSubmit?: HookEntry[]
+  PreCompact?: HookEntry[]
+  SubagentStart?: HookEntry[]
+  SubagentStop?: HookEntry[]
+  [key: string]: HookEntry[] | undefined
+}
+
+function loadHooksConfig(): { config: HooksConfig; source: string } {
+  const hooksPaths = [
+    join(workingDirectory, '.claude', 'hooks.json'),
+    join(process.env.HOME || '~', '.claude', 'hooks.json'),
+  ]
+  for (const hp of hooksPaths) {
+    if (existsSync(hp)) {
+      try {
+        const raw = JSON.parse(readFileSync(hp, 'utf-8'))
+        // If the file has a top-level "hooks" key (ECC format), unwrap it
+        const config: HooksConfig = raw.hooks ?? raw
+        return { config, source: hp }
+      } catch {}
+    }
+  }
+  return { config: {}, source: 'none' }
+}
+
+function getDisabledHookIds(): Set<string> {
+  const envVal = process.env.ECC_DISABLED_HOOKS || ''
+  return new Set(envVal.split(',').map(s => s.trim()).filter(Boolean))
+}
+
+function getCommandsFromHook(hook: HookEntry): string[] {
+  // Support both flat { command } and nested { hooks: [{ command }] } formats
+  if (hook.command) return [hook.command]
+  if (hook.hooks) return hook.hooks.filter(h => h.type === 'command').map(h => h.command)
+  return []
+}
+
+// Universal hook executor — works for all 8 event types
+async function executeHooks(
+  event: string,
+  matchValue: string,
+  envVars: Record<string, string>,
+  options: { blocking?: boolean } = {},
+): Promise<{ blocked: boolean; output: string }> {
+  const { config } = loadHooksConfig()
+  const entries = config[event]
+  if (!entries || entries.length === 0) return { blocked: false, output: '' }
+
+  const disabledIds = getDisabledHookIds()
+  let output = ''
+  let blocked = false
+
+  for (const hook of entries) {
+    // Skip disabled hooks
+    if (hook.id && disabledIds.has(hook.id)) continue
+
+    // Matcher check: empty/undefined = match all, '*' = match all, or substring match
+    const matcher = hook.matcher || '*'
+    if (matcher !== '*' && !matchValue.includes(matcher)) continue
+
+    const commands = getCommandsFromHook(hook)
+    for (const cmd of commands) {
+      try {
+        const hookProc = Bun.spawn(['bash', '-c', cmd], {
+          cwd: workingDirectory,
+          env: { ...process.env, ...envVars },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        })
+
+        if (options.blocking) {
+          const exitCode = await hookProc.exited
+          const stdout = await new Response(hookProc.stdout).text()
+          const stderr = await new Response(hookProc.stderr).text()
+          if (exitCode === 2) {
+            blocked = true
+            output = stderr || stdout
+            return { blocked, output }
+          }
+          if (stdout) output += stdout
+        } else {
+          // Fire and forget
+          hookProc.unref()
+        }
+      } catch (err) {
+        console.error(`[Hook] ${event} error (${hook.id || cmd}):`, err)
+      }
+    }
+  }
+  return { blocked, output }
+}
+
+// Convenience wrappers
 async function runPostToolHooks(
-  hooks: { PostToolUse?: Array<{ matcher: string; command: string }> },
   toolName: string,
   input: Record<string, unknown>,
   result: string,
 ) {
-  if (!hooks.PostToolUse) return
-  for (const hook of hooks.PostToolUse) {
-    if (hook.matcher === '*' || toolName.includes(hook.matcher)) {
-      try {
-        Bun.spawn(['bash', '-c', hook.command], {
-          cwd: workingDirectory,
-          env: {
-            ...process.env,
-            HOOK_TOOL_NAME: toolName,
-            HOOK_TOOL_INPUT: JSON.stringify(input),
-            HOOK_TOOL_OUTPUT: result.slice(0, 10000), // Limit env var size
-          },
-          stdout: 'ignore',
-          stderr: 'ignore',
-        })
-      } catch (err) {
-        console.error(`[Hook] PostToolUse error:`, err)
-      }
-    }
-  }
+  await executeHooks('PostToolUse', toolName, {
+    HOOK_TOOL_NAME: toolName,
+    HOOK_TOOL_INPUT: JSON.stringify(input),
+    HOOK_TOOL_OUTPUT: result.slice(0, 10000),
+  })
 }
 
 async function executeToolForLoop(
@@ -2850,54 +2968,20 @@ async function executeToolForLoop(
   // Track usage
   toolUsageStats[toolName] = (toolUsageStats[toolName] || 0) + 1
 
-  // ── 钩子系统 (Hooks) ──
-  // Load hooks from .claude/settings.json or .claude/hooks.json
-  let hooks: {
-    PreToolUse?: Array<{ matcher: string; command: string }>
-    PostToolUse?: Array<{ matcher: string; command: string }>
-  } = {}
-  const hooksPaths = [
-    join(workingDirectory, '.claude', 'hooks.json'),
-    join(process.env.HOME || '~', '.claude', 'hooks.json'),
-  ]
-  for (const hp of hooksPaths) {
-    if (existsSync(hp)) {
-      try { hooks = JSON.parse(readFileSync(hp, 'utf-8')); break } catch {}
-    }
-  }
-
-  // Execute PreToolUse hooks
-  if (hooks.PreToolUse) {
-    for (const hook of hooks.PreToolUse) {
-      if (hook.matcher === '*' || toolName.includes(hook.matcher)) {
-        try {
-          const hookProc = Bun.spawn(['bash', '-c', hook.command], {
-            cwd: workingDirectory,
-            env: {
-              ...process.env,
-              HOOK_TOOL_NAME: toolName,
-              HOOK_TOOL_INPUT: JSON.stringify(input),
-            },
-            stdout: 'pipe',
-            stderr: 'pipe',
-          })
-          const exitCode = await hookProc.exited
-          if (exitCode !== 0) {
-            const stderr = await new Response(hookProc.stderr).text()
-            return `[PreToolUse Hook 已拦截] ${hook.command}\n${stderr}`
-          }
-        } catch (err) {
-          console.error(`[Hook] PreToolUse error:`, err)
-        }
-      }
-    }
+  // ── 钩子系统 (Hooks) — PreToolUse ──
+  const preResult = await executeHooks('PreToolUse', toolName, {
+    HOOK_TOOL_NAME: toolName,
+    HOOK_TOOL_INPUT: JSON.stringify(input),
+  }, { blocking: true })
+  if (preResult.blocked) {
+    return `[PreToolUse Hook 已拦截] ${preResult.output}`
   }
 
   try {
     // ── MCP 工具路由 ──
     if (McpManager.isMcpTool(toolName)) {
       const result = await mcpManager.callTool(toolName, input)
-      await runPostToolHooks(hooks, toolName, input, result)
+      await runPostToolHooks(toolName, input, result)
       return result
     }
 
@@ -2933,7 +3017,7 @@ async function executeToolForLoop(
             output = output.slice(0, 25000) + `\n\n... [输出被截断, 总长 ${output.length} 字符] ...\n\n` + output.slice(-25000)
           }
           const result = output || '(no output)'
-          await runPostToolHooks(hooks, toolName, input, result)
+          await runPostToolHooks(toolName, input, result)
           return result
         } catch (err) {
           clearTimeout(timer)
@@ -2947,7 +3031,7 @@ async function executeToolForLoop(
         const stat = statSync(filePath)
         if (stat.size > 2 * 1024 * 1024) return `Error: File too large (${(stat.size / 1024 / 1024).toFixed(1)} MB)`
         const result = readFileSync(filePath, 'utf-8')
-        await runPostToolHooks(hooks, toolName, input, result)
+        await runPostToolHooks(toolName, input, result)
         return result
       }
 
@@ -2961,7 +3045,7 @@ async function executeToolForLoop(
         const newContent = content.replace(oldStr, newStr)
         writeFileSync(filePath, newContent, 'utf-8')
         const result = `Successfully edited ${filePath}`
-        await runPostToolHooks(hooks, toolName, input, result)
+        await runPostToolHooks(toolName, input, result)
         return result
       }
 
@@ -2975,7 +3059,7 @@ async function executeToolForLoop(
         }
         writeFileSync(filePath, content, 'utf-8')
         const result = `Successfully wrote ${filePath} (${content.length} bytes)`
-        await runPostToolHooks(hooks, toolName, input, result)
+        await runPostToolHooks(toolName, input, result)
         return result
       }
 

@@ -1386,6 +1386,24 @@ async function handleApiRequest(
             official: false,
             envRequired: 'FIRECRAWL_API_KEY',
           },
+          {
+            name: 'playwright',
+            description: '浏览器自动化 E2E 测试 — Playwright 驱动',
+            command: 'npx',
+            args: ['-y', '@playwright/mcp', '--extension'],
+            category: '浏览器',
+            stars: 2600,
+            official: false,
+          },
+          {
+            name: 'context7',
+            description: '文档上下文查询 — 即时获取 API 参考资料',
+            command: 'npx',
+            args: ['-y', '@upstash/context7-mcp'],
+            category: '推理增强',
+            stars: 1400,
+            official: false,
+          },
         ],
         skills: [
           {
@@ -1552,6 +1570,281 @@ async function handleApiRequest(
         return Response.json({ ok: true, name: skillName }, { headers: corsHeaders })
       }
       return Response.json({ error: `技能不存在: ${skillName}` }, { status: 404, headers: corsHeaders })
+    }
+
+    // ─── Skill Packs API (ECC Integration) ───────────────
+
+    // Skill Pack definitions
+    const ECC_REPO = 'https://github.com/affaan-m/everything-claude-code.git'
+    const eccRoot = join(workingDirectory, 'everything-claude-code')
+
+    type SkillPackDef = {
+      id: string
+      name: string
+      icon: string
+      description: string
+      category: 'core' | 'language' | 'framework' | 'security' | 'devops' | 'mcp'
+      agents?: string[]
+      skills?: string[]
+      commands?: string[]
+      rules?: string[]
+    }
+
+    type IndividualSkillDef = {
+      id: string
+      name: string
+      icon: string
+      description: string
+      type: 'agent' | 'skill' | 'command'
+      file: string     // source path relative to ECC root
+      target: string   // target path relative to .claude/
+    }
+
+    const SKILL_PACKS: SkillPackDef[] = [
+      {
+        id: 'ecc-core', name: '核心能力包', icon: '🧠',
+        description: '规划、代码审查、TDD、架构设计、安全审查、构建修复',
+        category: 'core',
+        agents: ['planner.md', 'code-reviewer.md', 'tdd-guide.md', 'architect.md', 'security-reviewer.md', 'build-error-resolver.md', 'refactor-cleaner.md'],
+        skills: ['search-first', 'tdd-workflow', 'security-review', 'coding-standards', 'verification-loop'],
+        commands: ['plan.md', 'code-review.md', 'tdd.md', 'build-fix.md', 'verify.md'],
+      },
+      {
+        id: 'ecc-typescript', name: 'TypeScript 开发包', icon: '📘',
+        description: 'TypeScript 代码审查、编码规范、前端模式',
+        category: 'language',
+        agents: ['typescript-reviewer.md'],
+        skills: ['frontend-patterns', 'backend-patterns'],
+        rules: ['common', 'typescript'],
+      },
+      {
+        id: 'ecc-python', name: 'Python 开发包', icon: '🐍',
+        description: 'Python 代码审查、Django 全栈开发',
+        category: 'language',
+        agents: ['python-reviewer.md'],
+        skills: ['python-patterns', 'python-testing', 'django-patterns', 'django-tdd'],
+        rules: ['python'],
+      },
+      {
+        id: 'ecc-golang', name: 'Go 开发包', icon: '🔷',
+        description: 'Go 代码审查、构建修复、模式和测试',
+        category: 'language',
+        agents: ['go-reviewer.md', 'go-build-resolver.md'],
+        skills: ['golang-patterns', 'golang-testing'],
+        rules: ['golang'],
+      },
+      {
+        id: 'ecc-java', name: 'Java 开发包', icon: '☕',
+        description: 'Java/Spring Boot 代码审查、构建修复、测试',
+        category: 'language',
+        agents: ['java-reviewer.md', 'java-build-resolver.md'],
+        skills: ['springboot-patterns', 'springboot-tdd', 'springboot-security'],
+        rules: ['java'],
+      },
+      {
+        id: 'ecc-security', name: '安全审计包', icon: '🔒',
+        description: '安全漏洞分析、审计扫描',
+        category: 'security',
+        agents: ['security-reviewer.md'],
+        skills: ['security-review', 'security-scan'],
+        commands: ['code-review.md'],
+      },
+      {
+        id: 'ecc-devops', name: 'DevOps 包', icon: '🚀',
+        description: '部署、Docker、E2E 测试、数据库迁移',
+        category: 'devops',
+        skills: ['deployment-patterns', 'docker-patterns', 'e2e-testing', 'database-migrations'],
+        commands: ['e2e.md'],
+      },
+      {
+        id: 'ecc-rules-common', name: '通用编码规范', icon: '📏',
+        description: '代码风格、Git 工作流、测试、性能、安全通用规范',
+        category: 'core',
+        rules: ['common'],
+      },
+      {
+        id: 'ecc-learning', name: '持续学习包', icon: '📚',
+        description: '自动提取模式、战略性压缩、迭代检索',
+        category: 'core',
+        skills: ['continuous-learning', 'continuous-learning-v2', 'strategic-compact', 'iterative-retrieval'],
+        commands: ['learn.md', 'learn-eval.md', 'checkpoint.md'],
+      },
+    ]
+
+    const INDIVIDUAL_SKILLS: IndividualSkillDef[] = [
+      { id: 'ecc-skill-search-first', name: '搜索优先', icon: '🔍', description: '先搜索再写代码', type: 'skill', file: 'skills/search-first', target: 'skills/search-first' },
+      { id: 'ecc-agent-planner', name: '规划器', icon: '📋', description: '功能实现规划专家', type: 'agent', file: 'agents/planner.md', target: 'agents/planner.md' },
+      { id: 'ecc-agent-code-reviewer', name: '代码审查', icon: '🔎', description: '质量和安全评审', type: 'agent', file: 'agents/code-reviewer.md', target: 'agents/code-reviewer.md' },
+      { id: 'ecc-agent-tdd-guide', name: 'TDD 向导', icon: '🧪', description: '测试驱动开发', type: 'agent', file: 'agents/tdd-guide.md', target: 'agents/tdd-guide.md' },
+      { id: 'ecc-agent-architect', name: '架构师', icon: '🏗️', description: '系统架构设计', type: 'agent', file: 'agents/architect.md', target: 'agents/architect.md' },
+      { id: 'ecc-cmd-plan', name: '/plan 命令', icon: '📝', description: '实现规划斜杠命令', type: 'command', file: 'commands/plan.md', target: 'commands/plan.md' },
+      { id: 'ecc-cmd-e2e', name: '/e2e 命令', icon: '🎯', description: 'E2E 测试生成', type: 'command', file: 'commands/e2e.md', target: 'commands/e2e.md' },
+      { id: 'ecc-cmd-refactor', name: '/refactor-clean', icon: '🧹', description: '死代码清理', type: 'command', file: 'commands/refactor-clean.md', target: 'commands/refactor-clean.md' },
+      { id: 'ecc-skill-eval', name: '验证循环', icon: '✅', description: '持续验证和评估', type: 'skill', file: 'skills/verification-loop', target: 'skills/verification-loop' },
+      { id: 'ecc-skill-api-design', name: 'API 设计', icon: '🌐', description: 'REST API 设计模式', type: 'skill', file: 'skills/api-design', target: 'skills/api-design' },
+    ]
+
+    function isPackInstalled(pack: SkillPackDef): boolean {
+      const claudeDir = join(workingDirectory, '.claude')
+      // Check if at least one component from each non-empty category exists
+      if (pack.agents?.length) {
+        const first = join(claudeDir, 'agents', pack.agents[0])
+        if (!existsSync(first)) return false
+      }
+      if (pack.skills?.length) {
+        const first = join(claudeDir, 'skills', pack.skills[0])
+        if (!existsSync(first)) return false
+      }
+      if (pack.commands?.length) {
+        const first = join(claudeDir, 'commands', pack.commands[0])
+        if (!existsSync(first)) return false
+      }
+      if (pack.rules?.length) {
+        const first = join(claudeDir, 'rules', pack.rules[0])
+        if (!existsSync(first)) return false
+      }
+      return true
+    }
+
+    function isIndividualInstalled(item: IndividualSkillDef): boolean {
+      return existsSync(join(workingDirectory, '.claude', item.target))
+    }
+
+    async function ensureEccRepo(): Promise<boolean> {
+      if (existsSync(join(eccRoot, 'agents'))) return true
+      console.log('  📦 自动克隆 ECC 仓库...')
+      const proc = Bun.spawnSync(['git', 'clone', '--depth', '1', ECC_REPO, eccRoot], {
+        cwd: workingDirectory,
+        stdout: 'inherit',
+        stderr: 'inherit',
+      })
+      return proc.exitCode === 0
+    }
+
+    // GET /api/skill-packs — List all packs and individual skills
+    if (path === '/api/skill-packs' && method === 'GET') {
+      const packs = SKILL_PACKS.map(p => ({
+        ...p,
+        installed: isPackInstalled(p),
+        componentCount: (p.agents?.length || 0) + (p.skills?.length || 0) + (p.commands?.length || 0) + (p.rules?.length || 0),
+      }))
+      const individuals = INDIVIDUAL_SKILLS.map(s => ({
+        ...s,
+        installed: isIndividualInstalled(s),
+      }))
+      return Response.json({ packs, individuals, eccAvailable: existsSync(join(eccRoot, 'agents')) }, { headers: corsHeaders })
+    }
+
+    // POST /api/skill-packs/install — Install a pack or individual skill
+    if (path === '/api/skill-packs/install' && method === 'POST') {
+      const body = await req.json() as { packId?: string; individualId?: string }
+      const { cpSync, mkdirSync } = await import('node:fs')
+
+      // Ensure ECC repo exists
+      if (!(await ensureEccRepo())) {
+        return Response.json({ error: 'ECC 仓库克隆失败' }, { status: 500, headers: corsHeaders })
+      }
+
+      const claudeDir = join(workingDirectory, '.claude')
+      let installed: string[] = []
+
+      if (body.individualId) {
+        // Install individual skill/agent/command
+        const item = INDIVIDUAL_SKILLS.find(s => s.id === body.individualId)
+        if (!item) return Response.json({ error: '未找到该组件' }, { status: 404, headers: corsHeaders })
+        const src = join(eccRoot, item.file)
+        const dst = join(claudeDir, item.target)
+        if (existsSync(src)) {
+          mkdirSync(join(dst, '..'), { recursive: true })
+          const srcStat = statSync(src)
+          if (srcStat.isDirectory()) {
+            cpSync(src, dst, { recursive: true })
+          } else {
+            cpSync(src, dst)
+          }
+          installed.push(item.name)
+        }
+      } else if (body.packId) {
+        // Install pack
+        const pack = SKILL_PACKS.find(p => p.id === body.packId)
+        if (!pack) return Response.json({ error: '未找到该技能包' }, { status: 404, headers: corsHeaders })
+
+        // Copy agents
+        if (pack.agents) {
+          const dir = join(claudeDir, 'agents')
+          mkdirSync(dir, { recursive: true })
+          for (const f of pack.agents) {
+            const src = join(eccRoot, 'agents', f)
+            if (existsSync(src)) { cpSync(src, join(dir, f)); installed.push(f) }
+          }
+        }
+        // Copy skills (directories)
+        if (pack.skills) {
+          const dir = join(claudeDir, 'skills')
+          mkdirSync(dir, { recursive: true })
+          for (const s of pack.skills) {
+            const src = join(eccRoot, 'skills', s)
+            if (existsSync(src)) { cpSync(src, join(dir, s), { recursive: true }); installed.push(s) }
+          }
+        }
+        // Copy commands
+        if (pack.commands) {
+          const dir = join(claudeDir, 'commands')
+          mkdirSync(dir, { recursive: true })
+          for (const f of pack.commands) {
+            const src = join(eccRoot, 'commands', f)
+            if (existsSync(src)) { cpSync(src, join(dir, f)); installed.push(f) }
+          }
+        }
+        // Copy rules (directories)
+        if (pack.rules) {
+          const dir = join(claudeDir, 'rules')
+          mkdirSync(dir, { recursive: true })
+          for (const r of pack.rules) {
+            const src = join(eccRoot, 'rules', r)
+            if (existsSync(src)) { cpSync(src, join(dir, r), { recursive: true }); installed.push(r) }
+          }
+        }
+      }
+
+      return Response.json({ ok: true, installed }, { headers: corsHeaders })
+    }
+
+    // POST /api/skill-packs/uninstall — Uninstall a pack or individual
+    if (path === '/api/skill-packs/uninstall' && method === 'POST') {
+      const body = await req.json() as { packId?: string; individualId?: string }
+      const { rmSync } = await import('node:fs')
+      const claudeDir = join(workingDirectory, '.claude')
+      let removed: string[] = []
+
+      if (body.individualId) {
+        const item = INDIVIDUAL_SKILLS.find(s => s.id === body.individualId)
+        if (item) {
+          const target = join(claudeDir, item.target)
+          if (existsSync(target)) { rmSync(target, { recursive: true, force: true }); removed.push(item.name) }
+        }
+      } else if (body.packId) {
+        const pack = SKILL_PACKS.find(p => p.id === body.packId)
+        if (pack) {
+          for (const f of pack.agents || []) {
+            const t = join(claudeDir, 'agents', f)
+            if (existsSync(t)) { rmSync(t, { force: true }); removed.push(f) }
+          }
+          for (const s of pack.skills || []) {
+            const t = join(claudeDir, 'skills', s)
+            if (existsSync(t)) { rmSync(t, { recursive: true, force: true }); removed.push(s) }
+          }
+          for (const f of pack.commands || []) {
+            const t = join(claudeDir, 'commands', f)
+            if (existsSync(t)) { rmSync(t, { force: true }); removed.push(f) }
+          }
+          for (const r of pack.rules || []) {
+            const t = join(claudeDir, 'rules', r)
+            if (existsSync(t)) { rmSync(t, { recursive: true, force: true }); removed.push(r) }
+          }
+        }
+      }
+      return Response.json({ ok: true, removed }, { headers: corsHeaders })
     }
 
     // ─── Permissions API ────────────────────────────────

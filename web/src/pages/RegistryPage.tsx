@@ -27,6 +27,35 @@ interface RegistryData {
   categories: string[]
 }
 
+interface SkillPack {
+  id: string
+  name: string
+  icon: string
+  description: string
+  category: string
+  installed: boolean
+  componentCount: number
+  agents?: string[]
+  skills?: string[]
+  commands?: string[]
+  rules?: string[]
+}
+
+interface IndividualSkill {
+  id: string
+  name: string
+  icon: string
+  description: string
+  type: 'agent' | 'skill' | 'command'
+  installed: boolean
+}
+
+interface SkillPackData {
+  packs: SkillPack[]
+  individuals: IndividualSkill[]
+  eccAvailable: boolean
+}
+
 // ─── Status Dot Component ────────────────────────────
 
 function StatusDot({ status }: { status: 'connected' | 'installed' | 'available' }) {
@@ -126,8 +155,9 @@ function EnvKeyModal({
 
 export function RegistryPage() {
   const [data, setData] = useState<RegistryData | null>(null)
+  const [packData, setPackData] = useState<SkillPackData | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'mcp' | 'skills'>('mcp')
+  const [activeTab, setActiveTab] = useState<'mcp' | 'skills' | 'packs'>('packs')
   const [activeCategory, setActiveCategory] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [installing, setInstalling] = useState<string | null>(null)
@@ -135,9 +165,16 @@ export function RegistryPage() {
 
   const fetchRegistry = useCallback(async () => {
     try {
-      const res = await fetch('/api/registry')
-      const json = await res.json()
-      setData(json)
+      const [regRes, packRes] = await Promise.all([
+        fetch('/api/registry'),
+        fetch('/api/skill-packs'),
+      ])
+      const regJson = await regRes.json()
+      setData(regJson)
+      try {
+        const packJson = await packRes.json()
+        setPackData(packJson)
+      } catch { /* skill packs might not be available */ }
     } catch (err) {
       console.error('Failed to fetch registry:', err)
     } finally {
@@ -184,6 +221,70 @@ export function RegistryPage() {
     }
   }, [fetchRegistry])
 
+  const installPack = useCallback(async (packId: string) => {
+    setInstalling(packId)
+    try {
+      await fetch('/api/skill-packs/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packId }),
+      })
+      await fetchRegistry()
+    } catch (err) {
+      console.error('Install failed:', err)
+    } finally {
+      setInstalling(null)
+    }
+  }, [fetchRegistry])
+
+  const uninstallPack = useCallback(async (packId: string) => {
+    setInstalling(packId)
+    try {
+      await fetch('/api/skill-packs/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packId }),
+      })
+      await fetchRegistry()
+    } catch (err) {
+      console.error('Uninstall failed:', err)
+    } finally {
+      setInstalling(null)
+    }
+  }, [fetchRegistry])
+
+  const installIndividual = useCallback(async (individualId: string) => {
+    setInstalling(individualId)
+    try {
+      await fetch('/api/skill-packs/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ individualId }),
+      })
+      await fetchRegistry()
+    } catch (err) {
+      console.error('Install failed:', err)
+    } finally {
+      setInstalling(null)
+    }
+  }, [fetchRegistry])
+
+  const uninstallIndividual = useCallback(async (individualId: string) => {
+    setInstalling(individualId)
+    try {
+      await fetch('/api/skill-packs/uninstall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ individualId }),
+      })
+      await fetchRegistry()
+    } catch (err) {
+      console.error('Uninstall failed:', err)
+    } finally {
+      setInstalling(null)
+    }
+  }, [fetchRegistry])
+
   const handleInstallClick = useCallback((server: McpServerEntry) => {
     if (server.envRequired) {
       setEnvModal(server)
@@ -218,6 +319,7 @@ export function RegistryPage() {
   const allCategories = ['all', ...(data.categories || [])]
   const installedCount = data.mcpServers.filter(s => s.installed).length
   const connectedCount = data.mcpServers.filter(s => s.connected).length
+  const packsInstalledCount = packData?.packs.filter(p => p.installed).length || 0
 
   const filteredMcp = data.mcpServers.filter(s => {
     if (activeCategory !== 'all' && s.category !== activeCategory) return false
@@ -240,7 +342,10 @@ export function RegistryPage() {
             {connectedCount} 已连接
           </span>
           <span className="page-badge">
-            {installedCount}/{data.mcpServers.length} 已安装
+            {packsInstalledCount} 技能包已装
+          </span>
+          <span className="page-badge">
+            {installedCount}/{data.mcpServers.length} MCP
           </span>
         </div>
       </div>
@@ -250,11 +355,17 @@ export function RegistryPage() {
         <input
           type="text"
           className="search-input"
-          placeholder={activeTab === 'mcp' ? '搜索 MCP 服务器...' : '搜索技能模板...'}
+          placeholder={activeTab === 'mcp' ? '搜索 MCP 服务器...' : activeTab === 'packs' ? '搜索技能包...' : '搜索技能模板...'}
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
         />
         <div className="filter-tabs">
+          <button
+            className={`filter-tab ${activeTab === 'packs' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('packs'); setActiveCategory('all') }}
+          >
+            技能包 <span className="filter-count">{packData?.packs.length || 0}</span>
+          </button>
           <button
             className={`filter-tab ${activeTab === 'mcp' ? 'active' : ''}`}
             onClick={() => { setActiveTab('mcp'); setActiveCategory('all') }}
@@ -288,6 +399,129 @@ export function RegistryPage() {
 
       {/* ── Body ── */}
       <div className="page-body">
+
+        {/* ── Skill Packs Grid ── */}
+        {activeTab === 'packs' && packData && (
+          <>
+            {/* Pack cards */}
+            <div style={{ padding: '0 24px 12px', fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>
+              📦 技能包 — 一键安装全套组件
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
+                来自 <a href="https://github.com/affaan-m/everything-claude-code" target="_blank" rel="noopener" style={{ color: 'var(--accent)' }}>Everything Claude Code</a>
+              </span>
+            </div>
+            <div className="tools-grid">
+              {packData.packs
+                .filter(p => !searchQuery || p.name.includes(searchQuery) || p.description.includes(searchQuery))
+                .map(pack => {
+                const isInstalling = installing === pack.id
+                return (
+                  <div key={pack.id} className={`tool-card ${pack.installed ? 'tool-card-active' : ''}`}>
+                    <div className="tool-card-header">
+                      <span className="tool-card-icon">{pack.icon}</span>
+                      <span className="tool-card-name">{pack.name}</span>
+                      <span className="tool-card-perm" style={{
+                        color: pack.installed ? '#10b981' : 'var(--text-muted)',
+                        fontSize: 11,
+                      }}>
+                        {pack.installed ? '✓ 已安装' : `${pack.componentCount} 组件`}
+                      </span>
+                    </div>
+                    <div className="tool-card-desc">{pack.description}</div>
+                    <div className="tool-card-footer" style={{ gap: 4 }}>
+                      {pack.agents && pack.agents.length > 0 && (
+                        <span className="tool-card-category">{pack.agents.length} agent</span>
+                      )}
+                      {pack.skills && pack.skills.length > 0 && (
+                        <span className="tool-card-category">{pack.skills.length} skill</span>
+                      )}
+                      {pack.commands && pack.commands.length > 0 && (
+                        <span className="tool-card-category">{pack.commands.length} cmd</span>
+                      )}
+                      {pack.rules && pack.rules.length > 0 && (
+                        <span className="tool-card-category">{pack.rules.length} rule</span>
+                      )}
+                      <span style={{ flex: 1 }} />
+                      {!pack.installed ? (
+                        <button
+                          className="btn-primary"
+                          style={{ fontSize: 11, padding: '3px 12px', whiteSpace: 'nowrap' }}
+                          disabled={isInstalling}
+                          onClick={() => installPack(pack.id)}
+                        >
+                          {isInstalling ? '安装中...' : '安装'}
+                        </button>
+                      ) : (
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11, padding: '3px 10px', color: '#ef4444' }}
+                          disabled={isInstalling}
+                          onClick={() => uninstallPack(pack.id)}
+                        >
+                          {isInstalling ? '卸载中...' : '卸载'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Individual skills */}
+            <div style={{ padding: '20px 24px 12px', fontSize: 13, color: 'var(--text-secondary)', fontWeight: 500 }}>
+              ⭐ 热门单品 — 按需安装
+            </div>
+            <div className="tools-grid">
+              {packData.individuals
+                .filter(s => !searchQuery || s.name.includes(searchQuery) || s.description.includes(searchQuery))
+                .map(item => {
+                const isInstalling = installing === item.id
+                const typeLabel = item.type === 'agent' ? 'Agent' : item.type === 'skill' ? 'Skill' : 'Command'
+                return (
+                  <div key={item.id} className={`tool-card ${item.installed ? 'tool-card-active' : ''}`}>
+                    <div className="tool-card-header">
+                      <span className="tool-card-icon">{item.icon}</span>
+                      <span className="tool-card-name">{item.name}</span>
+                      <span className="tool-card-perm" style={{
+                        fontSize: 10,
+                        padding: '1px 6px',
+                        borderRadius: 4,
+                        background: 'var(--bg-tertiary)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text-secondary)',
+                      }}>
+                        {typeLabel}
+                      </span>
+                    </div>
+                    <div className="tool-card-desc">{item.description}</div>
+                    <div className="tool-card-footer">
+                      <span style={{ flex: 1 }} />
+                      {!item.installed ? (
+                        <button
+                          className="btn-primary"
+                          style={{ fontSize: 11, padding: '3px 12px' }}
+                          disabled={isInstalling}
+                          onClick={() => installIndividual(item.id)}
+                        >
+                          {isInstalling ? '安装中...' : '安装'}
+                        </button>
+                      ) : (
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11, padding: '3px 10px', color: '#ef4444' }}
+                          disabled={isInstalling}
+                          onClick={() => uninstallIndividual(item.id)}
+                        >
+                          {isInstalling ? '卸载中...' : '卸载'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
 
         {/* ── MCP Server Grid ── */}
         {activeTab === 'mcp' && (

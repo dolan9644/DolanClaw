@@ -10,3 +10,4 @@ coverage
 *.lock
 design-taste-frontend/
 everything-claude-code
+.mcp.json

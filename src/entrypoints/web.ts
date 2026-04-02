@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, existsSync, writeFileSync, readdirSync, statSync } from 'fs'
-import { join, extname, basename, relative } from 'path'
+import { join, extname, basename, relative, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { homedir } from 'os'
 import {
@@ -53,6 +53,7 @@ const AUTH_PROTECTED_ROUTES = [
   '/api/files/write',
   '/api/memories',
   '/api/tasks',
+  '/api/bash',
 ]
 
 function checkAuth(req: Request, path: string, corsHeaders: Record<string, string>): Response | null {
@@ -105,7 +106,6 @@ setInterval(() => {
 
 // ─── Path Safety ────────────────────────────────────────
 function isPathSafe(filePath: string): boolean {
-  const { resolve } = require('path') as typeof import('path')
   const normalizedResolved = resolve(filePath)
   return normalizedResolved.startsWith(process.cwd())
 }
@@ -365,6 +365,33 @@ async function handleApiRequest(
           { error: 'Missing command' },
           { status: 400, headers: corsHeaders },
         )
+      }
+
+      // Dangerous command filter
+      const FORBIDDEN_PATTERNS = [
+        'rm -rf /',
+        'rm -rf ~',
+        'rm -rf *',
+        'mkfs.',
+        '> /dev/',
+        'dd if=',
+        ':(){ :|:& };:',
+        'chmod -R 777 /',
+        'curl.*| bash',
+        'wget.*| bash',
+        'shutdown',
+        'reboot',
+        'init 0',
+        'init 6',
+      ]
+      const cmdLower = body.command.toLowerCase()
+      for (const pattern of FORBIDDEN_PATTERNS) {
+        if (cmdLower.includes(pattern.toLowerCase())) {
+          return Response.json(
+            { error: `禁止执行的危险命令: 包含 "${pattern}"` },
+            { status: 403, headers: corsHeaders },
+          )
+        }
       }
       try {
         const proc = Bun.spawn(['bash', '-c', body.command], {

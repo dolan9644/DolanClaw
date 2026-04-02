@@ -315,6 +315,7 @@ $ARGUMENTS
 
 ## 致谢
 
+- [Claude Code Best](https://github.com/claude-code-best/claude-code) — 项目灵感来源，感谢开源社区的贡献
 - [Model Context Protocol](https://modelcontextprotocol.io/) — MCP 开放协议
 - [Outfit](https://fonts.google.com/specimen/Outfit) — UI 字体
 - [JetBrains Mono](https://www.jetbrains.com/mono/) — 等宽代码字体

@@ -1103,60 +1103,109 @@ async function handleApiRequest(
 
       const skills: SkillEntry[] = []
 
+      // Check disabled state
+      const disabledPath = join(process.env.HOME || '~', '.claude', 'disabled-skills.json')
+      let disabledSet: Set<string> = new Set()
+      if (existsSync(disabledPath)) {
+        try { disabledSet = new Set(JSON.parse(readFileSync(disabledPath, 'utf-8'))) } catch {}
+      }
+
+      const parseSkillFile = (filePath: string, raw: string, source: 'project' | 'user', defaultName: string): SkillEntry => {
+        let name = defaultName
+        let description = ''
+        let trigger = 'auto'
+        let content = raw
+
+        const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
+        if (fmMatch) {
+          const fm = fmMatch[1]
+          content = fmMatch[2]
+          const nameMatch = fm.match(/name:\s*(.+)/)
+          const descMatch = fm.match(/description:\s*(.+)/)
+          const trigMatch = fm.match(/trigger:\s*(.+)/)
+          if (nameMatch) name = nameMatch[1].trim()
+          if (descMatch) description = descMatch[1].trim()
+          if (trigMatch) trigger = trigMatch[1].trim()
+        } else {
+          const firstLine = raw.split('\n').find(l => l.trim() && !l.startsWith('#'))
+          if (firstLine) description = firstLine.trim().slice(0, 100)
+        }
+
+        return {
+          name, source, description, trigger,
+          active: !disabledSet.has(filePath),
+          filePath,
+          content: content.trim(),
+        }
+      }
+
       const scanSkillsDir = (dir: string, source: 'project' | 'user') => {
+        if (!existsSync(dir)) return
+        try {
+          const entries = readdirSync(dir)
+          for (const entry of entries) {
+            const fullPath = join(dir, entry)
+            const stat = statSync(fullPath)
+
+            if (stat.isFile() && entry.endsWith('.md')) {
+              // Flat .md file
+              const raw = readFileSync(fullPath, 'utf-8')
+              skills.push(parseSkillFile(fullPath, raw, source, entry.replace(/\.md$/, '')))
+            } else if (stat.isDirectory()) {
+              // Subdirectory — check for SKILL.md (ECC format)
+              const skillMd = join(fullPath, 'SKILL.md')
+              if (existsSync(skillMd)) {
+                const raw = readFileSync(skillMd, 'utf-8')
+                skills.push(parseSkillFile(skillMd, raw, source, entry))
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Scan agents/ directory (treat .md files as agent-type skills)
+      const scanAgentsDir = (dir: string, source: 'project' | 'user') => {
         if (!existsSync(dir)) return
         try {
           const files = readdirSync(dir).filter(f => f.endsWith('.md'))
           for (const f of files) {
             const filePath = join(dir, f)
             const raw = readFileSync(filePath, 'utf-8')
-
-            // Parse YAML frontmatter
-            let name = f.replace(/\.md$/, '')
-            let description = ''
-            let trigger = 'auto'
-            let content = raw
-
-            const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
-            if (fmMatch) {
-              const fm = fmMatch[1]
-              content = fmMatch[2]
-              const nameMatch = fm.match(/name:\s*(.+)/)
-              const descMatch = fm.match(/description:\s*(.+)/)
-              const trigMatch = fm.match(/trigger:\s*(.+)/)
-              if (nameMatch) name = nameMatch[1].trim()
-              if (descMatch) description = descMatch[1].trim()
-              if (trigMatch) trigger = trigMatch[1].trim()
-            } else {
-              // No frontmatter, use first line as description
-              const firstLine = raw.split('\n').find(l => l.trim() && !l.startsWith('#'))
-              if (firstLine) description = firstLine.trim().slice(0, 100)
-            }
-
-            // Check disabled state from localStorage-like file
-            const disabledPath = join(process.env.HOME || '~', '.claude', 'disabled-skills.json')
-            let disabledSet: Set<string> = new Set()
-            if (existsSync(disabledPath)) {
-              try { disabledSet = new Set(JSON.parse(readFileSync(disabledPath, 'utf-8'))) } catch {}
-            }
-
-            skills.push({
-              name,
-              source,
-              description,
-              trigger,
-              active: !disabledSet.has(filePath),
-              filePath,
-              content: content.trim(),
-            })
+            const entry = parseSkillFile(filePath, raw, source, f.replace(/\.md$/, ''))
+            entry.trigger = 'agent'
+            if (!entry.description) entry.description = `代理: ${entry.name}`
+            skills.push(entry)
           }
         } catch { /* ignore */ }
       }
 
-      // Project skills
-      scanSkillsDir(join(workingDirectory, '.claude', 'skills'), 'project')
-      // User skills
-      scanSkillsDir(join(process.env.HOME || '~', '.claude', 'skills'), 'user')
+      // Scan commands/ directory
+      const scanCommandsDir = (dir: string, source: 'project' | 'user') => {
+        if (!existsSync(dir)) return
+        try {
+          const files = readdirSync(dir).filter(f => f.endsWith('.md'))
+          for (const f of files) {
+            const filePath = join(dir, f)
+            const raw = readFileSync(filePath, 'utf-8')
+            const entry = parseSkillFile(filePath, raw, source, f.replace(/\.md$/, ''))
+            entry.trigger = 'command'
+            if (!entry.description) entry.description = `命令: /${entry.name}`
+            skills.push(entry)
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Project .claude/ directories
+      const projectClaude = join(workingDirectory, '.claude')
+      scanSkillsDir(join(projectClaude, 'skills'), 'project')
+      scanAgentsDir(join(projectClaude, 'agents'), 'project')
+      scanCommandsDir(join(projectClaude, 'commands'), 'project')
+
+      // User ~/.claude/ directories
+      const userClaude = join(process.env.HOME || '~', '.claude')
+      scanSkillsDir(join(userClaude, 'skills'), 'user')
+      scanAgentsDir(join(userClaude, 'agents'), 'user')
+      scanCommandsDir(join(userClaude, 'commands'), 'user')
 
       // Built-in default skills
       const builtinSkills: SkillEntry[] = [
@@ -3225,7 +3274,19 @@ async function executeHooks(
         })
 
         if (options.blocking) {
-          const exitCode = await hookProc.exited
+          // Timeout protection: kill hook if it takes > 5 seconds
+          const HOOK_TIMEOUT = 5000
+          const timeoutPromise = new Promise<number>((resolve) =>
+            setTimeout(() => {
+              try { hookProc.kill(); } catch {}
+              console.warn(`[Hook] ${event} timeout (${hook.id || cmd}) — killed after ${HOOK_TIMEOUT}ms`)
+              resolve(-1) // sentinel for timeout
+            }, HOOK_TIMEOUT)
+          )
+
+          const exitCode = await Promise.race([hookProc.exited, timeoutPromise])
+          if (exitCode === -1) continue // timed out, skip this hook
+
           const stdout = await new Response(hookProc.stdout).text()
           const stderr = await new Response(hookProc.stderr).text()
           if (exitCode === 2) {

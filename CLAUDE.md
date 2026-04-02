@@ -113,3 +113,68 @@ All `feature('FLAG_NAME')` calls come from `bun:bundle` (a build-time API). In t
 - **React Compiler output** — Components have decompiled memoization boilerplate (`const $ = _c(N)`). This is normal.
 - **`bun:bundle` import** — In `src/main.tsx` and other files, `import { feature } from 'bun:bundle'` works at build time. At dev-time, the polyfill in `cli.tsx` provides it.
 - **`src/` path alias** — tsconfig maps `src/*` to `./src/*`. Imports like `import { ... } from 'src/utils/...'` are valid.
+
+## Extension System (DolanClaw)
+
+DolanClaw supports a modular extension system via the `.claude/` directory. This section tells you where to install what and what is safe.
+
+### Directory Structure
+
+```
+.claude/
+├── skills/        # Skill definitions (auto-detected by /api/skills)
+│   ├── my-skill.md           # Flat .md format
+│   └── search-first/         # ECC-style subdirectory format
+│       └── SKILL.md           # Must contain SKILL.md to be detected
+├── agents/        # Agent definitions (auto-detected by /api/skills)
+│   └── planner.md
+├── commands/      # Slash commands (auto-detected by /api/skills)
+│   └── plan.md
+├── rules/         # Coding rules and conventions
+│   └── common.md
+└── hooks.json     # Hook configuration (⚠️ DANGEROUS — executes bash)
+```
+
+### Safety Levels for Installation
+
+| Component | Location | Safety | Notes |
+|-----------|----------|--------|-------|
+| Skills (.md / SKILL.md) | `.claude/skills/` | ✅ SAFE | Pure markdown, affects prompts only |
+| Agents (.md) | `.claude/agents/` | ✅ SAFE | Pure markdown, affects prompts only |
+| Commands (.md) | `.claude/commands/` | ✅ SAFE | Pure markdown, slash command definitions |
+| Rules (.md) | `.claude/rules/` | ✅ SAFE | Pure markdown, coding conventions |
+| MCP servers | `.mcp.json` | ⚠️ MEDIUM | May fail to connect but won't crash |
+| Hooks | `.claude/hooks.json` | 🔴 DANGEROUS | Executes arbitrary bash commands, has 5s timeout |
+| Core code | `src/entrypoints/web.ts` | 🔴 NEVER MODIFY | Will crash the application |
+
+### Installation Guidelines for Bots
+
+When a user asks you to install an extension:
+
+1. **Skills, agents, commands, rules** — Copy the .md file to the appropriate `.claude/` subdirectory. This is always safe.
+2. **MCP servers** — Add to `.mcp.json` via `/api/registry/install-mcp` endpoint. Always verify the npx package name exists.
+3. **Hooks** — NEVER install hooks without explicit user approval. Show the bash command to the user first.
+4. **Never modify `src/entrypoints/web.ts`** — This is the reverse-engineered core. Modifying it will break the system.
+5. **Everything Claude Code (ECC)** components are available via the Skill Pack Marketplace (扩展市场 → 技能包 tab). They can also be installed manually from `everything-claude-code/` repository clone.
+
+### API Endpoints for Extensions
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/skills` | GET | List all installed skills (scans `.claude/skills/`, `agents/`, `commands/`) |
+| `/api/agents` | GET | List agent configurations |
+| `/api/registry` | GET | List MCP servers and marketplace items |
+| `/api/skill-packs` | GET | List ECC skill packs and individual items |
+| `/api/skill-packs/install` | POST | Install a skill pack or individual item |
+| `/api/skill-packs/uninstall` | POST | Uninstall a skill pack or individual item |
+| `/api/hooks` | GET | List configured hooks |
+| `/api/health` | GET | Server health check |
+
+### Web UI (Frontend)
+
+- **`web/src/pages/RegistryPage.tsx`** — Extension marketplace (3 tabs: Skill Packs / MCP / Skills)
+- **`web/src/pages/SkillsAgentsPage.tsx`** — Skill center and agent management
+- **`web/src/pages/ToolsPage.tsx`** — Tool browser
+- **Frontend dev server**: `cd web && npm run dev` (Vite on port 5173, proxies `/api` to backend on 3000)
+- **Backend**: `bun run src/entrypoints/web.ts` (port 3000)
+

@@ -31,7 +31,7 @@ const DEMO_AGENTS: Agent[] = [
   { name: 'CodeAgent', type: 'built-in', description: '通用代码编写代理', tools: ['Bash', 'Edit', 'Read', 'Grep', 'Glob'], active: true },
   { name: 'TestAgent', type: 'built-in', description: '测试编写和运行代理', tools: ['Bash', 'Read', 'Edit'], active: true },
   { name: 'ReviewAgent', type: 'built-in', description: '代码审查代理', tools: ['Read', 'Grep', 'Glob'], active: true },
-  { name: 'DocAgent', type: 'custom', description: '文档生成代理', model: 'minimax-m2.7-hs', tools: ['Read', 'Edit', 'Glob'], active: false },
+  { name: 'DocAgent', type: 'custom', description: '文档生成代理', model: 'minimax-m2.7', tools: ['Read', 'Edit', 'Glob'], active: false },
 ]
 
 const SOURCE_META: Record<string, { icon: string; label: string; color: string }> = {

@@ -1057,7 +1057,22 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
 
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(`HTTP ${response.status}: ${errorText}`)
+        // User-friendly error messages based on status code
+        let friendlyMsg = `API 错误 (${response.status})`
+        if (response.status === 401) {
+          friendlyMsg = '❌ API Key 无效或未配置\n\n请检查 .env 文件中的 API Key 是否正确，并重启后端服务。'
+        } else if (response.status === 429) {
+          friendlyMsg = '⏳ 请求频率超限\n\n请稍后再试，或切换到其他模型。'
+        } else if (response.status === 400) {
+          if (errorText.includes('unknown model') || errorText.includes('未知模型')) {
+            friendlyMsg = `❌ 模型不可用: ${currentModel}\n\n该模型可能已下线或名称有误，请尝试切换其他模型。`
+          } else {
+            friendlyMsg = `❌ 请求参数错误\n\n${errorText}`
+          }
+        } else {
+          friendlyMsg = `❌ 错误 (${response.status}): ${errorText}`
+        }
+        throw new Error(friendlyMsg)
       }
 
       const reader = response.body?.getReader()
@@ -1228,14 +1243,27 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
       if ((err as Error).name === 'AbortError') {
         // User interrupted
       } else {
+        const errMsg = err instanceof Error ? err.message : String(err)
+        let displayContent: string
+        if (errMsg.includes('Failed to fetch') || errMsg.includes('NetworkError') || errMsg.includes('ERR_CONNECTION_REFUSED')) {
+          displayContent =
+            `⚠️ **无法连接后端服务**\n\n` +
+            `请确认后端已启动：\n` +
+            '```bash\nbun run src/entrypoints/web.ts --port 3000\n```\n\n' +
+            `然后刷新页面重试。`
+        } else if (errMsg.startsWith('❌') || errMsg.startsWith('⏳')) {
+          // Already formatted by our HTTP error handler
+          displayContent = errMsg
+        } else {
+          displayContent =
+            `⚠️ **请求出错**\n\n` +
+            `当前模型: **${currentModel}**\n\n` +
+            `错误信息: \`${errMsg}\``
+        }
         const simMsg: Message = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content:
-            `⚠️ **后端服务未连接**\n\n` +
-            `请运行 \`bun run src/entrypoints/web.ts\` 启动后端服务。\n\n` +
-            `当前模型: **${currentModel}**\n\n` +
-            `错误: \`${err instanceof Error ? err.message : String(err)}\``,
+          content: displayContent,
           timestamp: Date.now(),
         }
         setMessages(prev => [...prev, simMsg])

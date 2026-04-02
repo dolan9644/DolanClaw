@@ -19,7 +19,7 @@ interface ModelInfo {
 
 const BUILTIN_MODELS: ModelInfo[] = [
   {
-    key: 'minimax-m2.7-hs', displayName: 'MiniMax M2.7 High Speed',
+    key: 'minimax-text-01', displayName: 'MiniMax Text 01',
     provider: 'MiniMax', modelId: 'MiniMax-M2.7-High-Speed',
     apiBase: 'https://api.minimaxi.chat/v1',
     maxOutputTokens: 16000, contextWindow: 1000000,

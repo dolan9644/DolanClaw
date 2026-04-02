@@ -26,6 +26,11 @@ import type { OpenAIChatRequest, OpenAIChatResponse } from './openaiCompat.js'
 const DEFAULT_TIMEOUT_MS = 120_000 // 2 minutes
 const MAX_RETRIES = 2
 const RETRY_BASE_DELAY_MS = 1000
+const ANTHROPIC_API_VERSION = '2023-06-01'
+
+function isAnthropicProvider(config: OpenAIModelConfig): boolean {
+  return config.provider === 'Anthropic'
+}
 
 // ─── Client ─────────────────────────────────────────────
 
@@ -109,17 +114,31 @@ export async function openaiChatCompletionStream(
     stream_options: { include_usage: true },
   }
 
+  // Anthropic needs special request format + URL
+  const url = isAnthropicProvider(config)
+    ? `${config.apiBase}/v1/messages`
+    : `${config.apiBase}/chat/completions`
+
+  const requestBody = isAnthropicProvider(config)
+    ? buildAnthropicRequestBody(body, config)
+    : JSON.stringify(body)
+
   const response = await fetchWithRetry(
-    `${config.apiBase}/chat/completions`,
+    url,
     {
       method: 'POST',
       headers: buildHeaders(apiKey, config),
-      body: JSON.stringify(body),
+      body: requestBody,
       signal: options.signal,
     },
     options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     config.displayName,
   )
+
+  // If Anthropic, wrap the response to convert SSE format to OpenAI format
+  if (isAnthropicProvider(config) && response.ok && response.body) {
+    return wrapAnthropicStreamAsOpenAI(response)
+  }
 
   return response
 }
@@ -146,17 +165,29 @@ export async function testOpenAIConnection(
 
   const start = Date.now()
   try {
-    const response = await fetchWithRetry(
-      `${config.apiBase}/chat/completions`,
-      {
-        method: 'POST',
-        headers: buildHeaders(apiKey, config),
-        body: JSON.stringify({
+    const url = isAnthropicProvider(config)
+      ? `${config.apiBase}/v1/messages`
+      : `${config.apiBase}/chat/completions`
+
+    const body = isAnthropicProvider(config)
+      ? JSON.stringify({
+          model: config.modelId,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: 5,
+        })
+      : JSON.stringify({
           model: config.modelId,
           messages: [{ role: 'user', content: 'Hi' }],
           max_tokens: 5,
           stream: false,
-        }),
+        })
+
+    const response = await fetchWithRetry(
+      url,
+      {
+        method: 'POST',
+        headers: buildHeaders(apiKey, config),
+        body,
       },
       15_000, // 15s timeout for test
       config.displayName,
@@ -184,18 +215,138 @@ function buildHeaders(
   apiKey: string,
   config: OpenAIModelConfig,
 ): Record<string, string> {
+  if (isAnthropicProvider(config)) {
+    return {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': ANTHROPIC_API_VERSION,
+    }
+  }
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${apiKey}`,
   }
 
-  // Some providers need extra headers
-  if (config.provider === 'Zhipu') {
-    // GLM uses a JWT-style token, but their OpenAI compat endpoint
-    // accepts Bearer too — keep it simple for now.
+  return headers
+}
+
+// ─── Anthropic Adapter ──────────────────────────────────
+
+/**
+ * Convert OpenAI-style request body to Anthropic Messages API format.
+ * Key differences:
+ * - system prompt is a separate top-level field, not in messages
+ * - max_tokens is required
+ * - stream is a boolean at top level
+ */
+function buildAnthropicRequestBody(
+  request: OpenAIChatRequest,
+  config: OpenAIModelConfig,
+): string {
+  // Extract system messages and regular messages
+  const systemParts: string[] = []
+  const messages: Array<{ role: string; content: string }> = []
+
+  for (const msg of request.messages || []) {
+    if (msg.role === 'system') {
+      systemParts.push(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content))
+    } else {
+      messages.push({
+        role: msg.role as string,
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+      })
+    }
   }
 
-  return headers
+  const body: Record<string, unknown> = {
+    model: config.modelId,
+    max_tokens: request.max_tokens || config.maxOutputTokens,
+    messages,
+    stream: true,
+  }
+
+  if (systemParts.length > 0) {
+    body.system = systemParts.join('\n\n')
+  }
+
+  return JSON.stringify(body)
+}
+
+/**
+ * Wrap an Anthropic SSE stream response into an OpenAI-compatible SSE stream.
+ * Anthropic events:
+ *   event: content_block_delta  → data: {"delta":{"type":"text_delta","text":"..."}}
+ *   event: message_delta        → data: {"usage":{"output_tokens":N}}
+ *   event: message_start        → data: {"message":{"usage":{"input_tokens":N}}}
+ *   event: message_stop         → end of stream
+ * Converted to OpenAI:
+ *   data: {"choices":[{"delta":{"content":"..."}}]}
+ *   data: {"usage":{"prompt_tokens":N,"completion_tokens":N}}
+ *   data: [DONE]
+ */
+function wrapAnthropicStreamAsOpenAI(response: Response): Response {
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  let inputTokens = 0
+  let outputTokens = 0
+
+  const transformed = new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read()
+      if (done) {
+        // Send final usage + DONE
+        const usageChunk = JSON.stringify({
+          usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
+        })
+        controller.enqueue(encoder.encode(`data: ${usageChunk}\n\n`))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+        return
+      }
+
+      const text = decoder.decode(value, { stream: true })
+      const lines = text.split('\n')
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data: ')) continue
+        const dataStr = trimmed.slice(6)
+
+        try {
+          const event = JSON.parse(dataStr)
+
+          // message_start → extract input tokens
+          if (event.type === 'message_start' && event.message?.usage) {
+            inputTokens = event.message.usage.input_tokens || 0
+          }
+
+          // content_block_delta → text content
+          if (event.type === 'content_block_delta' && event.delta?.text) {
+            const openaiChunk = JSON.stringify({
+              choices: [{ delta: { content: event.delta.text } }],
+            })
+            controller.enqueue(encoder.encode(`data: ${openaiChunk}\n\n`))
+          }
+
+          // message_delta → output tokens
+          if (event.type === 'message_delta' && event.usage) {
+            outputTokens = event.usage.output_tokens || 0
+          }
+
+          // message_stop → will be handled when reader.done=true
+        } catch {
+          // Ignore parse errors
+        }
+      }
+    },
+  })
+
+  return new Response(transformed, {
+    status: response.status,
+    headers: response.headers,
+  })
 }
 
 async function fetchWithRetry(

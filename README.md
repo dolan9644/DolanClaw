@@ -1,57 +1,77 @@
-# DolanClaw — 国产大模型统一调度平台
+# DolanClaw — 大模型 API 学习调试工具
 
 <p align="center">
-  <strong>为国产大模型精心打造的本地 Web 开发助手</strong>
+  <strong>一个面向开发者学习与交流的多模型调试工具</strong><br>
+  <sub>⚠️ 本项目仅供学习研究用途，请勿用于商业用途</sub>
 </p>
 
 <p align="center">
-  <a href="#功能特性">功能特性</a> •
+  <a href="#项目说明">项目说明</a> •
+  <a href="#功能概览">功能概览</a> •
   <a href="#快速开始">快速开始</a> •
   <a href="#支持的模型">支持的模型</a> •
-  <a href="#开发指南">开发指南</a> •
   <a href="#许可证">许可证</a>
 </p>
 
 ---
 
-> **声明**：本项目与 Anthropic 公司无任何关联，不包含任何 Anthropic 原始代码。
-> 本项目基于 [Claude Code Best](https://github.com/claude-code-best/claude-code) 的开源架构，
-> 独立开发了面向国产大模型的 Web UI 界面和调度层。
+## 项目说明
+
+> **⚠️ 重要声明**
+>
+> 1. 本项目**仅供学习、研究和技术交流**，不得用于任何商业用途。
+> 2. 本项目基于 [Claude Code Best](https://github.com/claude-code-best/claude-code) 的开源架构进行学习性二次开发，**核心代码来自上游项目**，本项目主要贡献在于 Web UI 界面和国产大模型适配层。
+> 3. 本项目与 Anthropic、OpenAI、MiniMax、DeepSeek 等模型提供商**无任何关联**，也未获得上述任何公司的授权或背书。
+
+> **商标声明**：本项目中提及的 MiniMax、DeepSeek、Kimi、通义千问、GLM、Claude、Gemini、GPT
+> 等均为各自公司的注册商标。本项目不包含任何上述公司的 Logo 或品牌素材，仅通过
+> 标准 API 接口进行调用。
+
+> **数据安全**：本工具不存储任何用户数据。所有对话记录仅存在于浏览器本地 (localStorage)，
+> API 请求直接转发至用户自行配置的模型服务商，本项目不做任何中间存储或日志记录。
+> 用户应自行评估将敏感代码/数据发送至第三方 API 的风险。
 
 ---
 
-## 功能特性
+## 这个项目能做什么？
 
-### 核心
+DolanClaw 是一个**本地运行**的多模型调试工具，帮助开发者：
 
-- **多模型统一调度** — 支持 MiniMax、Gemini、GPT-4o、DeepSeek、Kimi、通义千问、GLM 等 10+ 国内外模型
-- **流式对话** — SSE 实时流式输出，支持思考过程面板、工具调用可视化
-- **MCP 服务器集成** — 连接外部工具服务器，扩展 AI 能力边界
+- 🔍 **对比不同大模型的表现** — 同一个 prompt 在 MiniMax / DeepSeek / Claude / Gemini 上的效果差异
+- 🛠️ **学习 LLM API 的调用方式** — 支持 OpenAI 兼容格式 + Anthropic 原生格式
+- 📖 **理解流式输出原理** — SSE 实时流式输出，可观察 token 逐字生成过程
+- 💡 **研究工具调用机制** — 可视化 Tool Calls 的请求和响应
 
-### 开发工具
+---
 
-- **文件浏览器** — 树状目录 + 代码预览 + 语法高亮
-- **变更视图** — Git diff 可视化，支持 Staged/Unstaged 分组
-- **任务看板** — Kanban 风格任务管理（创建/编辑/拖拽/删除）
-- **工具浏览器** — 查看所有可用工具，支持在线试用
-- **记忆管理** — 项目/用户/团队三级记忆文件编辑
+## 功能概览
 
-### 交互增强
+### 多模型调度
 
-- **斜杠命令** — `/clear` `/compact` `/cost` `/help` `/plan` 等 20+ 命令
-- **@ 文件引用** — 输入 `@` 快速引用项目文件
-- **消息编辑** — 可编辑已发送的用户消息并重新发送
-- **Command Palette** — `⌘K` 快速导航至任意页面
-- **键盘快捷键** — `?` 查看完整快捷键列表
-- **浅色/深色主题** — 一键切换，支持跟随系统
+- 国内：MiniMax、DeepSeek、Kimi、通义千问、GLM
+- 国际：Claude、Gemini、GPT-4o
+- 动态模型选择器 — 只显示已配置 API Key 的模型
 
-### 设计细节
+### 开发辅助
 
-- **Outfit + JetBrains Mono 字体**
-- **SVG 图标系统** — 干净的单色线条图标
-- **Liquid Glass 毛玻璃效果**
-- **微动画 + 触觉反馈**
-- **响应式布局** — 移动端侧边栏自适应
+- 文件浏览器（树状目录 + 语法高亮）
+- Git 变更视图（Staged / Unstaged）
+- 任务看板（Kanban 风格）
+- 记忆管理（项目/用户/团队三级）
+
+### 安全特性
+
+- API Key 仅在后端处理，前端不接触
+- 可选的访问密钥保护（`DOLANCLAW_API_SECRET`）
+- 每 IP 请求频率限制（60 次/分钟）
+- 文件访问路径安全校验
+
+### 交互
+
+- 斜杠命令（`/clear` `/compact` `/cost` 等）
+- `@` 文件引用
+- `⌘K` 命令面板
+- 浅色/深色主题切换
 
 ---
 
@@ -60,7 +80,7 @@
 ### 环境要求
 
 - [Node.js](https://nodejs.org/) >= 18
-- [Bun](https://bun.sh/) >= 1.0（后端运行时）
+- [Bun](https://bun.sh/) >= 1.0
 - 至少一个大模型的 API Key
 
 ### 安装
@@ -77,104 +97,86 @@ bun install
 cd web && npm install && cd ..
 ```
 
-### 配置模型 API Key
+### 配置 API Key
 
-在项目根目录创建 `.env` 文件：
+在项目根目录创建 `.env` 文件，按需添加你拥有的 Key：
 
 ```bash
-# MiniMax (推荐)
-MINIMAX_API_KEY=your_key_here
+# ── 国内模型 ──
+MINIMAX_API_KEY=your_key_here     # MiniMax (推荐国内首选)
+DEEPSEEK_API_KEY=your_key_here    # DeepSeek
+MOONSHOT_API_KEY=your_key_here    # Kimi
+DASHSCOPE_API_KEY=your_key_here   # 通义千问
+ZHIPU_API_KEY=your_key_here       # GLM
 
-# 或其他模型
-OPENAI_API_KEY=your_key_here
-DEEPSEEK_API_KEY=your_key_here
+# ── 国际模型 ──
+ANTHROPIC_API_KEY=your_key_here   # Claude
+GEMINI_API_KEY=your_key_here      # Gemini
+OPENAI_API_KEY=your_key_here      # GPT-4o
+
+# ── 安全（可选）──
+# DOLANCLAW_API_SECRET=your_secret  # 设置后所有写操作需要认证
 ```
+
+只需配置你持有的 Key，侧边栏会自动只显示可用的模型。
 
 ### 启动
 
 ```bash
-# 方式一：分别启动前后端（开发模式）
-bun run src/entrypoints/web.ts --port 3000   # 后端 API
-cd web && npm run dev                          # 前端 (端口 5173)
+# 后端
+bun run src/entrypoints/web.ts --port 3000
 
-# 方式二：生产构建
-cd web && npm run build                        # 构建前端
-bun run src/entrypoints/web.ts --port 3000     # 后端会自动 serve 构建产物
+# 前端（另一个终端）
+cd web && npm run dev
 ```
 
-打开浏览器访问 `http://localhost:5173`（开发模式）或 `http://localhost:3000`（生产模式）
+打开浏览器访问 `http://localhost:5173`。
 
 ---
 
 ## 支持的模型
 
-| 模型 | 提供商 | 状态 |
-|------|--------|------|
-| MiniMax M2.7 HS | MiniMax | ✅ 推荐 |
-| Gemini 2.5 Pro / Flash | Google | ✅ |
-| GPT-4o / GPT-4.1 | OpenAI | ✅ |
-| o3 | OpenAI | ✅ |
-| DeepSeek V3 / R1 | 深度求索 | ✅ |
-| Kimi 32K | 月之暗面 | ✅ |
-| 通义千问 Max | 阿里云 | ✅ |
-| GLM-4 Plus | 智谱 AI | ✅ |
+| 模型 | 提供商 | Key 环境变量 |
+|------|--------|-------------|
+| MiniMax M2.7 / M2.7 极速 | MiniMax | `MINIMAX_API_KEY` |
+| MiniMax M2.5 / Text-01 | MiniMax | `MINIMAX_API_KEY` |
+| DeepSeek V3 / R1 | 深度求索 | `DEEPSEEK_API_KEY` |
+| Kimi K2.5 / 128K | 月之暗面 | `MOONSHOT_API_KEY` |
+| 通义千问 Qwen3 Max | 阿里云 | `DASHSCOPE_API_KEY` |
+| GLM-5 / GLM-4 Plus | 智谱 AI | `ZHIPU_API_KEY` |
+| Claude Sonnet 4 / 3.5 / Haiku | Anthropic | `ANTHROPIC_API_KEY` |
+| Gemini 2.5 Pro / Flash | Google | `GEMINI_API_KEY` |
+| GPT-4o / GPT-4.1 / o3 | OpenAI | `OPENAI_API_KEY` |
 
-所有模型通过 OpenAI 兼容接口统一调度。
-
----
-
-## 项目结构
-
-```
-DolanClaw/
-├── src/                    # 后端源码 (TypeScript + Bun)
-│   ├── entrypoints/
-│   │   └── web.ts          # Web 服务器入口
-│   ├── services/api/       # OpenAI 兼容层
-│   └── utils/model/        # 模型注册 & 配置
-├── web/                    # 前端源码 (React + Vite)
-│   ├── src/
-│   │   ├── components/     # 通用组件 (Sidebar, Icons, CommandPalette)
-│   │   ├── pages/          # 13 个页面
-│   │   ├── App.tsx         # 路由 & 全局状态
-│   │   └── index.css       # 设计系统 (3700+ 行)
-│   └── index.html
-├── .env                    # API Key 配置 (需自建)
-└── README.md
-```
+所有模型通过统一的调度层调用（OpenAI 兼容格式 + Anthropic 原生适配）。
 
 ---
 
-## 开发指南
+## 技术架构
 
-### 前端开发
-
-```bash
-cd web
-npm run dev          # 启动开发服务器 (HMR)
-npx tsc --noEmit     # TypeScript 类型检查
-npm run build        # 生产构建
 ```
-
-### 技术栈
+浏览器 (React)  ──HTTP──>  后端 (Bun)  ──HTTPS──>  各模型 API
+                  ↑                        ↑
+             不接触 Key               Key 仅在此处
+```
 
 | 层级 | 技术 |
 |------|------|
-| 前端框架 | React 18 + TypeScript |
-| 构建工具 | Vite |
-| 样式 | Vanilla CSS (3700+ 行设计系统) |
+| 前端 | React 18 + TypeScript + Vite |
+| 样式 | Vanilla CSS 设计系统 |
 | 字体 | Outfit + JetBrains Mono |
-| 图标 | 自定义 SVG 组件 |
-| 后端运行时 | Bun |
-| API 协议 | OpenAI Chat Completion (兼容) |
+| 后端 | Bun |
+| API 协议 | OpenAI 兼容 + Anthropic 原生 |
 | 流式传输 | Server-Sent Events (SSE) |
 
-### 代码规范
+---
 
-- TypeScript 严格模式
-- 无 emoji — 全部使用 SVG 图标组件
-- CSS 变量设计系统 — 统一色彩/间距/动画
-- 组件化架构 — 页面 + 组件分离
+## 免责声明
+
+1. 本项目**仅供学习和技术交流**，使用者需自行承担使用风险。
+2. 使用各模型 API 产生的费用由使用者自行承担。
+3. 本项目作者不对因使用本项目而产生的任何直接或间接损失负责。
+4. 使用者应遵守各模型提供商的使用条款和当地法律法规。
 
 ---
 
@@ -182,16 +184,18 @@ npm run build        # 生产构建
 
 本项目采用 [Apache License 2.0](LICENSE) 开源许可证。
 
+**再次强调：本项目仅供学习交流，禁止商用。**
+
 ---
 
 ## 致谢
 
-- [Claude Code Best](https://github.com/claude-code-best/claude-code) — 原始架构参考
+- [Claude Code Best](https://github.com/claude-code-best/claude-code) — 核心架构来源
 - [Outfit](https://fonts.google.com/specimen/Outfit) — UI 字体
 - [JetBrains Mono](https://www.jetbrains.com/mono/) — 等宽代码字体
 
 ---
 
 <p align="center">
-  用 ❤️ 为国产大模型社区打造
+  仅供学习交流 · 请勿商用
 </p>

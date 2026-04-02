@@ -6,18 +6,9 @@ import {
   IconWrench, IconBot, IconShield, IconSessions, IconSettings,
 } from './Icons'
 
-const MODELS = [
-  { key: 'minimax-m2.7-hs', label: 'MiniMax M2.7 HS' },
-  { key: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-  { key: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { key: 'gpt-4o', label: 'GPT-4o' },
-  { key: 'gpt-4.1', label: 'GPT-4.1' },
-  { key: 'o3', label: 'o3' },
-  { key: 'deepseek-v3', label: 'DeepSeek V3' },
-  { key: 'deepseek-r1', label: 'DeepSeek R1' },
-  { key: 'kimi-32k', label: 'Kimi 32K' },
-  { key: 'qwen-max', label: '通义千问 Max' },
-  { key: 'glm-4-plus', label: 'GLM-4 Plus' },
+// Fallback model list (only used if backend is unreachable)
+const FALLBACK_MODELS = [
+  { key: 'minimax-m2.7', label: 'MiniMax M2.7 旗舰' },
 ]
 
 interface SidebarProps {
@@ -37,6 +28,26 @@ export function Sidebar({
 }: SidebarProps) {
   const [taskBadge, setTaskBadge] = useState('')
   const [contextPct, setContextPct] = useState(0)
+  const [availableModels, setAvailableModels] = useState(FALLBACK_MODELS)
+
+  // Fetch models with valid API keys from backend
+  useEffect(() => {
+    fetch('/api/models')
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => {
+        const withKeys = data
+          .filter(m => m.hasApiKey)
+          .map(m => ({ key: m.key, label: m.displayName }))
+        if (withKeys.length > 0) {
+          setAvailableModels(withKeys)
+          // If current model has no key, switch to first available
+          if (!withKeys.find(m => m.key === currentModel)) {
+            onModelChange(withKeys[0].key)
+          }
+        }
+      })
+      .catch(() => { /* use fallback */ })
+  }, [])
 
   useEffect(() => {
     const update = () => {
@@ -132,7 +143,7 @@ export function Sidebar({
           value={currentModel}
           onChange={(e) => onModelChange(e.target.value)}
         >
-          {MODELS.map(m => (
+          {availableModels.map(m => (
             <option key={m.key} value={m.key}>{m.label}</option>
           ))}
         </select>

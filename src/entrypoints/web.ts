@@ -1,17 +1,18 @@
 /**
- * DolanClaude Web Server — Backend Bridge
+ * DolanClaw Web Server — Backend Bridge
  *
  * Starts a local HTTP server that:
- * 1. Serves the DolanClaude Web UI (Vite build output)
- * 2. Proxies /api/* requests to the CLI engine
+ * 1. Serves the DolanClaw Web UI (Vite build output)
+ * 2. Proxies /api/* requests to LLM providers (keys stay server-side)
  * 3. Streams chat responses via SSE
+ *
+ * Security:
+ * - API Keys are server-side only, never exposed to frontend
+ * - Optional auth via DOLANCLAW_API_SECRET env var
+ * - Per-IP rate limiting (60 requests/min)
  *
  * Usage:
  *   bun run src/entrypoints/web.ts [--port 3000]
- *
- * This is the bridge between the Web UI frontend and the
- * Claude Code CLI engine, enabling all existing tools and
- * capabilities to be used from the browser.
  */
 
 import { readFileSync, existsSync, writeFileSync, readdirSync, statSync } from 'fs'
@@ -39,6 +40,76 @@ import {
 
 // ─── Config ─────────────────────────────────────────────
 const DEFAULT_PORT = 3000
+
+// ─── Auth ───────────────────────────────────────────────
+// Optional: set DOLANCLAW_API_SECRET in .env to protect API endpoints.
+// If not set, auth is disabled (local dev mode — default).
+const API_SECRET = process.env.DOLANCLAW_API_SECRET || ''
+
+// Routes that require auth (write/invoke operations)
+const AUTH_PROTECTED_ROUTES = [
+  '/api/chat',
+  '/api/tools/execute',
+  '/api/files/write',
+  '/api/memories',
+  '/api/tasks',
+]
+
+function checkAuth(req: Request, path: string, corsHeaders: Record<string, string>): Response | null {
+  if (!API_SECRET) return null // Auth disabled in local mode
+  // Only protect write/invoke endpoints
+  if (!AUTH_PROTECTED_ROUTES.some(r => path.startsWith(r))) return null
+  const authHeader = req.headers.get('Authorization') || ''
+  const token = authHeader.replace('Bearer ', '')
+  if (token !== API_SECRET) {
+    return Response.json(
+      { error: '未授权：请在设置中配置正确的访问密钥' },
+      { status: 401, headers: corsHeaders },
+    )
+  }
+  return null
+}
+
+// ─── Rate Limiter (sliding window) ──────────────────────
+const RATE_LIMIT_WINDOW_MS = 60_000
+const RATE_LIMIT_MAX = 60
+const rateLimitMap = new Map<string, number[]>()
+
+function checkRateLimit(req: Request, corsHeaders: Record<string, string>): Response | null {
+  const ip = req.headers.get('x-forwarded-for')
+    || req.headers.get('x-real-ip')
+    || 'local'
+  const now = Date.now()
+  const timestamps = rateLimitMap.get(ip) || []
+  const valid = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS)
+  if (valid.length >= RATE_LIMIT_MAX) {
+    return Response.json(
+      { error: `请求频率超限：每分钟最多 ${RATE_LIMIT_MAX} 次请求` },
+      { status: 429, headers: corsHeaders },
+    )
+  }
+  valid.push(now)
+  rateLimitMap.set(ip, valid)
+  return null
+}
+
+// Clean up every 5 minutes
+setInterval(() => {
+  const now = Date.now()
+  for (const [ip, timestamps] of rateLimitMap) {
+    const valid = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW_MS)
+    if (valid.length === 0) rateLimitMap.delete(ip)
+    else rateLimitMap.set(ip, valid)
+  }
+}, 300_000)
+
+// ─── Path Safety ────────────────────────────────────────
+function isPathSafe(filePath: string): boolean {
+  const { resolve } = require('path') as typeof import('path')
+  const normalizedResolved = resolve(filePath)
+  return normalizedResolved.startsWith(process.cwd())
+}
+
 
 // ─── MIME Types ─────────────────────────────────────────
 const MIME_TYPES: Record<string, string> = {
@@ -115,7 +186,7 @@ async function handleApiRequest(
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   }
 
   if (method === 'OPTIONS') {
@@ -123,6 +194,14 @@ async function handleApiRequest(
   }
 
   try {
+    // Auth check
+    const authError = checkAuth(req, path, corsHeaders)
+    if (authError) return authError
+
+    // Rate limit check
+    const rateLimitError = checkRateLimit(req, corsHeaders)
+    if (rateLimitError) return rateLimitError
+
     // POST /api/chat — Streaming chat
     if (path === '/api/chat' && method === 'POST') {
       return handleChat(req, corsHeaders)
@@ -212,6 +291,12 @@ async function handleApiRequest(
     // GET /api/files/tree?path=... — List directory tree
     if (path === '/api/files/tree' && method === 'GET') {
       const dirPath = url.searchParams.get('path') || process.cwd()
+      if (!isPathSafe(dirPath)) {
+        return Response.json(
+          { error: '路径不安全：不允许访问项目目录之外的文件' },
+          { status: 403, headers: corsHeaders },
+        )
+      }
       try {
         const tree = buildFileTree(dirPath, 3)
         return Response.json(tree, { headers: corsHeaders })
@@ -230,6 +315,12 @@ async function handleApiRequest(
         return Response.json(
           { error: 'Missing path parameter' },
           { status: 400, headers: corsHeaders },
+        )
+      }
+      if (!isPathSafe(filePath)) {
+        return Response.json(
+          { error: '路径不安全：不允许访问项目目录之外的文件' },
+          { status: 403, headers: corsHeaders },
         )
       }
       try {
@@ -784,8 +875,21 @@ async function handleChat(
     )
   }
 
-  // Build system prompt
-  let systemContent = 'You are DolanClaude, an expert AI coding assistant. You help users with programming tasks, code review, debugging, and software architecture. Respond in the same language as the user.'
+  // Build system prompt — tell the model who it is and which model powers it
+  const modelDisplayName = config.displayName
+  const modelProvider = config.provider
+  let systemContent = [
+    `你是 DolanClaw，一个面向开发者的 AI 编码助手。`,
+    `你当前运行在 ${modelDisplayName} 模型上（由 ${modelProvider} 提供）。`,
+    ``,
+    `核心规则：`,
+    `1. 当用户问你"你是什么模型"或"你用的什么模型"时，直接回答："我是 DolanClaw，当前使用 ${modelDisplayName} 模型。"`,
+    `2. 绝对不要提及 Anthropic、OpenAI、Claude Code、claude.ts 或任何源码文件路径。`,
+    `3. 绝对不要把自己描述为任何公司的产品或基于任何公司的技术。`,
+    `4. 不要虚构自己的技术来源。如果不确定，就说"我是 DolanClaw，当前使用 ${modelDisplayName}。"`,
+    `5. 使用与用户相同的语言回复。`,
+    `6. 你是一个编程助手，专注于代码审查、调试、架构设计和编程问题解决。`,
+  ].join('\n')
 
   // Inject CLAUDE.md context if available
   const claudeMdPath = join(process.cwd(), 'CLAUDE.md')
@@ -869,6 +973,8 @@ async function handleChat(
           let sseBuffer = ''
           let totalOutputTokens = 0
           let totalInputTokens = 0
+          let thinkBuffer = ''
+          let insideThinking = false
 
           while (true) {
             const { done, value } = await reader.read()
@@ -889,9 +995,43 @@ async function handleChat(
                 const delta = chunk.choices?.[0]?.delta
                 if (!delta) continue
 
-                // Text content
+                // Text content — filter out <think>...</think> reasoning blocks
                 if (delta.content) {
-                  send({ type: 'text', text: delta.content })
+                  thinkBuffer += delta.content
+
+                  // Process the buffer to strip thinking blocks
+                  while (thinkBuffer.length > 0) {
+                    if (insideThinking) {
+                      const closeIdx = thinkBuffer.indexOf('</think>')
+                      if (closeIdx !== -1) {
+                        // Found close tag — skip everything up to and including it
+                        thinkBuffer = thinkBuffer.slice(closeIdx + 8)
+                        insideThinking = false
+                      } else {
+                        // Still inside thinking, consume all and wait for more
+                        thinkBuffer = ''
+                        break
+                      }
+                    } else {
+                      const openIdx = thinkBuffer.indexOf('<think>')
+                      if (openIdx !== -1) {
+                        // Send everything before the <think> tag
+                        const before = thinkBuffer.slice(0, openIdx)
+                        if (before) send({ type: 'text', text: before })
+                        thinkBuffer = thinkBuffer.slice(openIdx + 7)
+                        insideThinking = true
+                      } else {
+                        // No thinking tag — but might be a partial match at the end
+                        // Keep last 7 chars in case '<think>' is split across chunks
+                        if (thinkBuffer.length > 7) {
+                          const safe = thinkBuffer.slice(0, -7)
+                          send({ type: 'text', text: safe })
+                          thinkBuffer = thinkBuffer.slice(-7)
+                        }
+                        break
+                      }
+                    }
+                  }
                 }
 
                 // Tool calls
@@ -917,6 +1057,11 @@ async function handleChat(
                 // Ignore parse errors in stream
               }
             }
+          }
+
+          // Flush any remaining buffered text (not inside a thinking block)
+          if (thinkBuffer && !insideThinking) {
+            send({ type: 'text', text: thinkBuffer })
           }
 
           reader.releaseLock()

@@ -7,4 +7,5 @@ coverage
 .idea
 .vscode
 *.suo
-*.lockdesign-taste-frontend/
+*.lock
+design-taste-frontend/

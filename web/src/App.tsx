@@ -82,7 +82,7 @@ export default function App() {
     return (localStorage.getItem('dolanclaw-page') as PageId) || 'chat'
   })
   const [currentModel, setCurrentModel] = useState(() => {
-    return localStorage.getItem('dolanclaw-model') || 'minimax-m2.7-hs'
+    return localStorage.getItem('dolanclaw-model') || 'minimax-m2.7'
   })
   const [panelOpen, setPanelOpen] = useState(false)
   const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false)

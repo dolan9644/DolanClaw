@@ -8,9 +8,12 @@
  * - context.ts       → for max_tokens / context window
  * - modelCost.ts     → for cost tracking on Dashboard
  *
- * Users can add custom models via the DolanClaude Web UI. Custom
- * entries are persisted to ~/.claude/dolan-models.json and merged
- * with this built-in list at runtime.
+ * ⚠️  Domain & Model ID verified against live APIs on 2026-04-02.
+ *     MiniMax uses api.minimax.chat (大陆) / api.minimaxi.chat (国际)
+ *     DeepSeek uses api.deepseek.com
+ *     Kimi uses api.moonshot.cn (大陆) / api.moonshot.ai (国际)
+ *     Qwen uses dashscope.aliyuncs.com (大陆)
+ *     GLM uses open.bigmodel.cn
  */
 
 import { readFileSync } from 'fs'
@@ -52,11 +55,16 @@ export interface OpenAIModelConfig {
 // ─── Built-in Models ────────────────────────────────────
 
 export const BUILTIN_OPENAI_MODELS: Record<string, OpenAIModelConfig> = {
-  // ── MiniMax ──────────────────────────────────────────
-  'minimax-m2.7-hs': {
-    displayName: 'MiniMax M2.7 High Speed',
-    apiBase: 'https://api.minimaxi.chat/v1',
-    modelId: 'MiniMax-M2.7-High-Speed',
+
+  // ══════════════════════════════════════════════════════
+  // MiniMax — api.minimax.chat (大陆) / api.minimaxi.chat (国际)
+  // 验证日期: 2026-04-02, Key 环境: 大陆
+  // 可用模型: MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-Text-01
+  // ══════════════════════════════════════════════════════
+  'minimax-m2.7': {
+    displayName: 'MiniMax M2.7 (旗舰)',
+    apiBase: 'https://api.minimax.chat/v1',
+    modelId: 'MiniMax-M2.7',
     apiKeyEnvVar: 'MINIMAX_API_KEY',
     maxOutputTokens: 16000,
     contextWindow: 1000000,
@@ -68,12 +76,283 @@ export const BUILTIN_OPENAI_MODELS: Record<string, OpenAIModelConfig> = {
     currency: '¥',
     provider: 'MiniMax',
   },
+  'minimax-m2.7-hs': {
+    displayName: 'MiniMax M2.7 极速版',
+    apiBase: 'https://api.minimax.chat/v1',
+    modelId: 'MiniMax-M2.7-highspeed',
+    apiKeyEnvVar: 'MINIMAX_API_KEY',
+    maxOutputTokens: 16000,
+    contextWindow: 1000000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: true,
+    costPer1MInput: 1.0,
+    costPer1MOutput: 8.0,
+    currency: '¥',
+    provider: 'MiniMax',
+  },
+  'minimax-m2.5': {
+    displayName: 'MiniMax M2.5',
+    apiBase: 'https://api.minimax.chat/v1',
+    modelId: 'MiniMax-M2.5',
+    apiKeyEnvVar: 'MINIMAX_API_KEY',
+    maxOutputTokens: 16000,
+    contextWindow: 1000000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: true,
+    costPer1MInput: 1.0,
+    costPer1MOutput: 8.0,
+    currency: '¥',
+    provider: 'MiniMax',
+  },
+  'minimax-text-01': {
+    displayName: 'MiniMax Text 01',
+    apiBase: 'https://api.minimax.chat/v1',
+    modelId: 'MiniMax-Text-01',
+    apiKeyEnvVar: 'MINIMAX_API_KEY',
+    maxOutputTokens: 16000,
+    contextWindow: 1000000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 1.0,
+    costPer1MOutput: 8.0,
+    currency: '¥',
+    provider: 'MiniMax',
+  },
 
-  // ── Gemini (OpenAI-compatible endpoint) ──────────────
+  // ══════════════════════════════════════════════════════
+  // DeepSeek — api.deepseek.com
+  // 验证日期: 2026-04-02
+  // deepseek-chat = V3.2 非思考模式, deepseek-reasoner = V3.2 思考模式
+  // ══════════════════════════════════════════════════════
+  'deepseek-v3': {
+    displayName: 'DeepSeek V3 (Chat)',
+    apiBase: 'https://api.deepseek.com',
+    modelId: 'deepseek-chat',
+    apiKeyEnvVar: 'DEEPSEEK_API_KEY',
+    maxOutputTokens: 8000,
+    contextWindow: 128000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 0.27,
+    costPer1MOutput: 1.1,
+    currency: '¥',
+    provider: 'DeepSeek',
+  },
+  'deepseek-r1': {
+    displayName: 'DeepSeek R1 (推理)',
+    apiBase: 'https://api.deepseek.com',
+    modelId: 'deepseek-reasoner',
+    apiKeyEnvVar: 'DEEPSEEK_API_KEY',
+    maxOutputTokens: 64000,
+    contextWindow: 128000,
+    supportsToolCalls: false,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 0.55,
+    costPer1MOutput: 2.19,
+    currency: '¥',
+    provider: 'DeepSeek',
+  },
+
+  // ══════════════════════════════════════════════════════
+  // Kimi / Moonshot — api.moonshot.cn (大陆) / api.moonshot.ai (国际)
+  // 验证日期: 2026-04-02
+  // 最新模型: kimi-k2.5
+  // ══════════════════════════════════════════════════════
+  'kimi-k2.5': {
+    displayName: 'Kimi K2.5 (最新)',
+    apiBase: 'https://api.moonshot.cn/v1',
+    modelId: 'kimi-k2.5',
+    apiKeyEnvVar: 'MOONSHOT_API_KEY',
+    maxOutputTokens: 8000,
+    contextWindow: 128000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 24.0,
+    costPer1MOutput: 24.0,
+    currency: '¥',
+    provider: 'Moonshot',
+  },
+  'kimi-32k': {
+    displayName: 'Kimi (32K)',
+    apiBase: 'https://api.moonshot.cn/v1',
+    modelId: 'moonshot-v1-32k',
+    apiKeyEnvVar: 'MOONSHOT_API_KEY',
+    maxOutputTokens: 8000,
+    contextWindow: 32000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 24.0,
+    costPer1MOutput: 24.0,
+    currency: '¥',
+    provider: 'Moonshot',
+  },
+  'kimi-128k': {
+    displayName: 'Kimi (128K)',
+    apiBase: 'https://api.moonshot.cn/v1',
+    modelId: 'moonshot-v1-128k',
+    apiKeyEnvVar: 'MOONSHOT_API_KEY',
+    maxOutputTokens: 8000,
+    contextWindow: 128000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 60.0,
+    costPer1MOutput: 60.0,
+    currency: '¥',
+    provider: 'Moonshot',
+  },
+
+  // ══════════════════════════════════════════════════════
+  // 通义千问 / Qwen — dashscope.aliyuncs.com (大陆)
+  // 验证日期: 2026-04-02
+  // 最新: qwen3-max (旗舰), qwen3.5-plus, qwen3.5-flash
+  // ══════════════════════════════════════════════════════
+  'qwen3-max': {
+    displayName: '通义千问 Qwen3 Max',
+    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelId: 'qwen3-max',
+    apiKeyEnvVar: 'DASHSCOPE_API_KEY',
+    maxOutputTokens: 8192,
+    contextWindow: 256000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 20.0,
+    costPer1MOutput: 60.0,
+    currency: '¥',
+    provider: 'Alibaba',
+  },
+  'qwen3.5-plus': {
+    displayName: '通义千问 Qwen3.5 Plus',
+    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelId: 'qwen3.5-plus',
+    apiKeyEnvVar: 'DASHSCOPE_API_KEY',
+    maxOutputTokens: 8192,
+    contextWindow: 131072,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: true,
+    costPer1MInput: 0.8,
+    costPer1MOutput: 2.0,
+    currency: '¥',
+    provider: 'Alibaba',
+  },
+  'qwen3.5-flash': {
+    displayName: '通义千问 Qwen3.5 Flash',
+    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    modelId: 'qwen3.5-flash',
+    apiKeyEnvVar: 'DASHSCOPE_API_KEY',
+    maxOutputTokens: 8192,
+    contextWindow: 131072,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 0.15,
+    costPer1MOutput: 0.6,
+    currency: '¥',
+    provider: 'Alibaba',
+  },
+
+  // ══════════════════════════════════════════════════════
+  // 智谱 GLM — open.bigmodel.cn
+  // 验证日期: 2026-04-02
+  // 最新: glm-5 (旗舰), glm-4.7, glm-z1 (推理)
+  // ══════════════════════════════════════════════════════
+  'glm-5': {
+    displayName: 'GLM-5 (旗舰)',
+    apiBase: 'https://open.bigmodel.cn/api/paas/v4',
+    modelId: 'glm-5',
+    apiKeyEnvVar: 'ZHIPU_API_KEY',
+    maxOutputTokens: 4096,
+    contextWindow: 128000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 50.0,
+    costPer1MOutput: 50.0,
+    currency: '¥',
+    provider: 'Zhipu',
+  },
+  'glm-4-plus': {
+    displayName: 'GLM-4 Plus',
+    apiBase: 'https://open.bigmodel.cn/api/paas/v4',
+    modelId: 'glm-4-plus',
+    apiKeyEnvVar: 'ZHIPU_API_KEY',
+    maxOutputTokens: 4096,
+    contextWindow: 128000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 50.0,
+    costPer1MOutput: 50.0,
+    currency: '¥',
+    provider: 'Zhipu',
+  },
+
+  // ══════════════════════════════════════════════════════
+  // Claude / Anthropic — api.anthropic.com (国际)
+  // 注意：Anthropic API 格式与 OpenAI 不同，openaiClient.ts 中有适配层
+  // ══════════════════════════════════════════════════════
+  'claude-sonnet-4': {
+    displayName: 'Claude Sonnet 4',
+    apiBase: 'https://api.anthropic.com',
+    modelId: 'claude-sonnet-4-20250514',
+    apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+    maxOutputTokens: 16384,
+    contextWindow: 200000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: true,
+    costPer1MInput: 3.0,
+    costPer1MOutput: 15.0,
+    currency: '$',
+    provider: 'Anthropic',
+  },
+  'claude-3.5-sonnet': {
+    displayName: 'Claude 3.5 Sonnet',
+    apiBase: 'https://api.anthropic.com',
+    modelId: 'claude-3-5-sonnet-20241022',
+    apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+    maxOutputTokens: 8192,
+    contextWindow: 200000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: true,
+    costPer1MInput: 3.0,
+    costPer1MOutput: 15.0,
+    currency: '$',
+    provider: 'Anthropic',
+  },
+  'claude-3.5-haiku': {
+    displayName: 'Claude 3.5 Haiku',
+    apiBase: 'https://api.anthropic.com',
+    modelId: 'claude-3-5-haiku-20241022',
+    apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+    maxOutputTokens: 8192,
+    contextWindow: 200000,
+    supportsToolCalls: true,
+    supportsStreaming: true,
+    supportsVision: false,
+    costPer1MInput: 0.8,
+    costPer1MOutput: 4.0,
+    currency: '$',
+    provider: 'Anthropic',
+  },
+
+  // ══════════════════════════════════════════════════════
+  // Gemini — generativelanguage.googleapis.com (国际)
+  // ══════════════════════════════════════════════════════
   'gemini-2.5-pro': {
     displayName: 'Gemini 2.5 Pro',
     apiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    modelId: 'gemini-2.5-pro-preview-05-06',
+    modelId: 'gemini-2.5-pro',
     apiKeyEnvVar: 'GEMINI_API_KEY',
     maxOutputTokens: 65536,
     contextWindow: 1000000,
@@ -88,7 +367,7 @@ export const BUILTIN_OPENAI_MODELS: Record<string, OpenAIModelConfig> = {
   'gemini-2.5-flash': {
     displayName: 'Gemini 2.5 Flash',
     apiBase: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    modelId: 'gemini-2.5-flash-preview-05-20',
+    modelId: 'gemini-2.5-flash',
     apiKeyEnvVar: 'GEMINI_API_KEY',
     maxOutputTokens: 65536,
     contextWindow: 1000000,
@@ -101,7 +380,9 @@ export const BUILTIN_OPENAI_MODELS: Record<string, OpenAIModelConfig> = {
     provider: 'Google',
   },
 
-  // ── OpenAI ───────────────────────────────────────────
+  // ══════════════════════════════════════════════════════
+  // OpenAI — api.openai.com (国际)
+  // ══════════════════════════════════════════════════════
   'gpt-4o': {
     displayName: 'GPT-4o',
     apiBase: 'https://api.openai.com/v1',
@@ -146,119 +427,6 @@ export const BUILTIN_OPENAI_MODELS: Record<string, OpenAIModelConfig> = {
     costPer1MOutput: 8.0,
     currency: '$',
     provider: 'OpenAI',
-  },
-
-  // ── DeepSeek ─────────────────────────────────────────
-  'deepseek-v3': {
-    displayName: 'DeepSeek V3',
-    apiBase: 'https://api.deepseek.com/v1',
-    modelId: 'deepseek-chat',
-    apiKeyEnvVar: 'DEEPSEEK_API_KEY',
-    maxOutputTokens: 8000,
-    contextWindow: 128000,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 0.27,
-    costPer1MOutput: 1.1,
-    currency: '¥',
-    provider: 'DeepSeek',
-  },
-  'deepseek-r1': {
-    displayName: 'DeepSeek R1',
-    apiBase: 'https://api.deepseek.com/v1',
-    modelId: 'deepseek-reasoner',
-    apiKeyEnvVar: 'DEEPSEEK_API_KEY',
-    maxOutputTokens: 64000,
-    contextWindow: 128000,
-    supportsToolCalls: false,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 0.55,
-    costPer1MOutput: 2.19,
-    currency: '¥',
-    provider: 'DeepSeek',
-  },
-
-  // ── Kimi (Moonshot) ──────────────────────────────────
-  'kimi-32k': {
-    displayName: 'Kimi (32K)',
-    apiBase: 'https://api.moonshot.cn/v1',
-    modelId: 'moonshot-v1-32k',
-    apiKeyEnvVar: 'MOONSHOT_API_KEY',
-    maxOutputTokens: 8000,
-    contextWindow: 32000,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 24.0,
-    costPer1MOutput: 24.0,
-    currency: '¥',
-    provider: 'Moonshot',
-  },
-  'kimi-128k': {
-    displayName: 'Kimi (128K)',
-    apiBase: 'https://api.moonshot.cn/v1',
-    modelId: 'moonshot-v1-128k',
-    apiKeyEnvVar: 'MOONSHOT_API_KEY',
-    maxOutputTokens: 8000,
-    contextWindow: 128000,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 60.0,
-    costPer1MOutput: 60.0,
-    currency: '¥',
-    provider: 'Moonshot',
-  },
-
-  // ── Qwen (通义千问) ──────────────────────────────────
-  'qwen-max': {
-    displayName: '通义千问 Max',
-    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    modelId: 'qwen-max',
-    apiKeyEnvVar: 'DASHSCOPE_API_KEY',
-    maxOutputTokens: 8192,
-    contextWindow: 32000,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 20.0,
-    costPer1MOutput: 60.0,
-    currency: '¥',
-    provider: 'Alibaba',
-  },
-  'qwen-plus': {
-    displayName: '通义千问 Plus',
-    apiBase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    modelId: 'qwen-plus',
-    apiKeyEnvVar: 'DASHSCOPE_API_KEY',
-    maxOutputTokens: 8192,
-    contextWindow: 131072,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 0.8,
-    costPer1MOutput: 2.0,
-    currency: '¥',
-    provider: 'Alibaba',
-  },
-
-  // ── GLM (智谱) ───────────────────────────────────────
-  'glm-4-plus': {
-    displayName: 'GLM-4 Plus',
-    apiBase: 'https://open.bigmodel.cn/api/paas/v4',
-    modelId: 'glm-4-plus',
-    apiKeyEnvVar: 'ZHIPU_API_KEY',
-    maxOutputTokens: 4096,
-    contextWindow: 128000,
-    supportsToolCalls: true,
-    supportsStreaming: true,
-    supportsVision: false,
-    costPer1MInput: 50.0,
-    costPer1MOutput: 50.0,
-    currency: '¥',
-    provider: 'Zhipu',
   },
 }
 

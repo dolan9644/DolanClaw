@@ -197,7 +197,7 @@ export function SessionsPage() {
     const newSession: Session = {
       id: `s_${Date.now()}`,
       title: `新会话 ${sessions.length + 1}`,
-      model: localStorage.getItem('dolanclaw-model') || 'minimax-m2.7-hs',
+      model: localStorage.getItem('dolanclaw-model') || 'minimax-m2.7',
       messages: 0,
       cost: 0,
       startTime: new Date().toLocaleString('zh-CN'),
@@ -361,7 +361,22 @@ export function SettingsPage() {
   const save = (key: string, val: string) => { localStorage.setItem(`dolanclaw-${key}`, val) }
 
   const [language, setLanguage] = useState(load('lang', 'zh-CN'))
-  const [defaultModel, setDefaultModel] = useState(load('model', 'minimax-m2.7-hs'))
+  const [defaultModel, setDefaultModel] = useState(load('model', 'minimax-m2.7'))
+
+  // Dynamically fetch available models (only those with API keys)
+  const [availableModels, setAvailableModels] = useState<Array<{key: string, label: string}>>([]) 
+  useEffect(() => {
+    fetch('/api/models')
+      .then(r => r.json())
+      .then((models: Array<{key: string, displayName: string, hasApiKey: boolean}>) => {
+        const withKey = models
+          .filter(m => m.hasApiKey)
+          .map(m => ({ key: m.key, label: m.displayName }))
+        setAvailableModels(withKey)
+      })
+      .catch(() => {})
+  }, [])
+
   const [autoSave, setAutoSave] = useState(load('autoSave', 'true') === 'true')
   const [notifications, setNotifications] = useState(load('notifications', 'true') === 'true')
   const [theme, setTheme] = useState(load('theme', '深色 (默认)'))
@@ -472,9 +487,9 @@ export function SettingsPage() {
                   </div>
                   <select className="settings-select" value={defaultModel}
                     onChange={e => updateSetting('model', e.target.value, setDefaultModel)}>
-                    <option value="minimax-m2.7-hs">MiniMax M2.7 HS</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
-                    <option value="deepseek-v3">DeepSeek V3</option>
+                    {availableModels.map(m => (
+                      <option key={m.key} value={m.key}>{m.label}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="settings-item">

@@ -60,6 +60,29 @@ export async function openaiChatCompletion(
     )
   }
 
+  // Anthropic needs different URL + body format
+  if (isAnthropicProvider(config)) {
+    const url = `${config.apiBase}/v1/messages`
+    const requestBody = buildAnthropicRequestBody(
+      { ...request, model: config.modelId },
+      config,
+      false, // non-streaming
+    )
+    const response = await fetchWithRetry(
+      url,
+      {
+        method: 'POST',
+        headers: buildHeaders(apiKey, config),
+        body: requestBody,
+        signal: options.signal,
+      },
+      options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      config.displayName,
+    )
+    const json = await response.json()
+    return convertAnthropicResponseToOpenAI(json)
+  }
+
   const body: OpenAIChatRequest = {
     ...request,
     model: config.modelId,
@@ -243,18 +266,50 @@ function buildHeaders(
 function buildAnthropicRequestBody(
   request: OpenAIChatRequest,
   config: OpenAIModelConfig,
+  streaming = true,
 ): string {
-  // Extract system messages and regular messages
+  // Extract system messages and convert regular messages
   const systemParts: string[] = []
-  const messages: Array<{ role: string; content: string }> = []
+  const messages: Array<{ role: string; content: unknown }> = []
 
   for (const msg of request.messages || []) {
     if (msg.role === 'system') {
       systemParts.push(typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content))
+    } else if (msg.role === 'tool') {
+      // OpenAI tool message → Anthropic tool_result in a user message
+      messages.push({
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: msg.tool_call_id || '',
+          content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        }],
+      })
+    } else if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      // Assistant message with tool_calls → Anthropic content blocks
+      const contentBlocks: unknown[] = []
+      if (msg.content) {
+        contentBlocks.push({ type: 'text', text: msg.content })
+      }
+      for (const tc of msg.tool_calls) {
+        let parsedInput: Record<string, unknown>
+        try {
+          parsedInput = JSON.parse(tc.function.arguments || '{}')
+        } catch {
+          parsedInput = { raw: tc.function.arguments }
+        }
+        contentBlocks.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.function.name,
+          input: parsedInput,
+        })
+      }
+      messages.push({ role: 'assistant', content: contentBlocks })
     } else {
       messages.push({
         role: msg.role as string,
-        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+        content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || ''),
       })
     }
   }
@@ -263,14 +318,81 @@ function buildAnthropicRequestBody(
     model: config.modelId,
     max_tokens: request.max_tokens || config.maxOutputTokens,
     messages,
-    stream: true,
+    stream: streaming,
   }
 
   if (systemParts.length > 0) {
     body.system = systemParts.join('\n\n')
   }
 
+  // Convert OpenAI tools to Anthropic tools format
+  if (request.tools && request.tools.length > 0) {
+    body.tools = request.tools.map(t => ({
+      name: t.function.name,
+      description: t.function.description || '',
+      input_schema: t.function.parameters || { type: 'object', properties: {} },
+    }))
+    // tool_choice mapping
+    if (request.tool_choice === 'auto') {
+      body.tool_choice = { type: 'auto' }
+    } else if (request.tool_choice === 'none') {
+      body.tool_choice = { type: 'none' }
+    }
+  }
+
   return JSON.stringify(body)
+}
+
+/**
+ * Convert a non-streaming Anthropic Messages API response to OpenAI format.
+ */
+function convertAnthropicResponseToOpenAI(anthropicResp: Record<string, unknown>): OpenAIChatResponse {
+  const content = anthropicResp.content as Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }> || []
+  const usage = anthropicResp.usage as { input_tokens?: number; output_tokens?: number } || {}
+
+  let textContent = ''
+  const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
+
+  for (const block of content) {
+    if (block.type === 'text' && block.text) {
+      textContent += block.text
+    } else if (block.type === 'tool_use') {
+      toolCalls.push({
+        id: block.id || `call_${Date.now()}`,
+        type: 'function',
+        function: {
+          name: block.name || '',
+          arguments: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
+        },
+      })
+    }
+  }
+
+  const stopReason = anthropicResp.stop_reason as string
+  let finishReason: 'stop' | 'tool_calls' | 'length' | null = 'stop'
+  if (stopReason === 'tool_use') finishReason = 'tool_calls'
+  else if (stopReason === 'max_tokens') finishReason = 'length'
+
+  return {
+    id: (anthropicResp.id as string) || `chatcmpl-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model: (anthropicResp.model as string) || '',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: textContent || null,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+      },
+      finish_reason: finishReason,
+    }],
+    usage: {
+      prompt_tokens: usage.input_tokens || 0,
+      completion_tokens: usage.output_tokens || 0,
+      total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+    },
+  } as OpenAIChatResponse
 }
 
 /**
@@ -291,11 +413,29 @@ function wrapAnthropicStreamAsOpenAI(response: Response): Response {
   const encoder = new TextEncoder()
   let inputTokens = 0
   let outputTokens = 0
+  let sseBuffer = '' // Buffer for incomplete SSE lines
+
+  // Track tool call state for converting to OpenAI format
+  const toolCallAccumulators = new Map<number, {
+    id: string; name: string; args: string; blockIndex: number; emittedName: boolean
+  }>()
+  let toolCallOpenAIIndex = 0 // incrementing index for OpenAI tool_calls array
 
   const transformed = new ReadableStream({
     async pull(controller) {
       const { done, value } = await reader.read()
       if (done) {
+        // Emit finish_reason for tool_calls if we had any
+        const hasToolCalls = toolCallAccumulators.size > 0
+        const finishChunk = JSON.stringify({
+          choices: [{
+            index: 0,
+            delta: {},
+            finish_reason: hasToolCalls ? 'tool_calls' : 'stop',
+          }],
+        })
+        controller.enqueue(encoder.encode(`data: ${finishChunk}\n\n`))
+
         // Send final usage + DONE
         const usageChunk = JSON.stringify({
           usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens },
@@ -306,8 +446,9 @@ function wrapAnthropicStreamAsOpenAI(response: Response): Response {
         return
       }
 
-      const text = decoder.decode(value, { stream: true })
-      const lines = text.split('\n')
+      sseBuffer += decoder.decode(value, { stream: true })
+      const lines = sseBuffer.split('\n')
+      sseBuffer = lines.pop() || '' // Keep incomplete last line
 
       for (const line of lines) {
         const trimmed = line.trim()
@@ -322,22 +463,78 @@ function wrapAnthropicStreamAsOpenAI(response: Response): Response {
             inputTokens = event.message.usage.input_tokens || 0
           }
 
-          // content_block_delta → text content
-          if (event.type === 'content_block_delta' && event.delta?.text) {
-            const openaiChunk = JSON.stringify({
-              choices: [{ delta: { content: event.delta.text } }],
-            })
-            controller.enqueue(encoder.encode(`data: ${openaiChunk}\n\n`))
+          // content_block_start → could be text or tool_use
+          if (event.type === 'content_block_start') {
+            const block = event.content_block
+            if (block?.type === 'tool_use') {
+              // New tool call starting — emit OpenAI tool_calls delta with id + name
+              const idx = toolCallOpenAIIndex++
+              toolCallAccumulators.set(event.index, {
+                id: block.id || `call_${Date.now()}_${idx}`,
+                name: block.name || '',
+                args: '',
+                blockIndex: idx,
+                emittedName: false,
+              })
+              const openaiChunk = JSON.stringify({
+                choices: [{
+                  index: 0,
+                  delta: {
+                    tool_calls: [{
+                      index: idx,
+                      id: block.id,
+                      type: 'function',
+                      function: { name: block.name, arguments: '' },
+                    }],
+                  },
+                }],
+              })
+              controller.enqueue(encoder.encode(`data: ${openaiChunk}\n\n`))
+              const acc = toolCallAccumulators.get(event.index)!
+              acc.emittedName = true
+            }
+            // text block start — nothing to emit yet
           }
 
-          // message_delta → output tokens
-          if (event.type === 'message_delta' && event.usage) {
-            outputTokens = event.usage.output_tokens || 0
+          // content_block_delta → text or input_json_delta
+          if (event.type === 'content_block_delta') {
+            if (event.delta?.type === 'text_delta' && event.delta.text) {
+              // Normal text delta
+              const openaiChunk = JSON.stringify({
+                choices: [{ index: 0, delta: { content: event.delta.text } }],
+              })
+              controller.enqueue(encoder.encode(`data: ${openaiChunk}\n\n`))
+            } else if (event.delta?.type === 'input_json_delta' && event.delta.partial_json !== undefined) {
+              // Tool call arguments delta
+              const acc = toolCallAccumulators.get(event.index)
+              if (acc) {
+                acc.args += event.delta.partial_json
+                const openaiChunk = JSON.stringify({
+                  choices: [{
+                    index: 0,
+                    delta: {
+                      tool_calls: [{
+                        index: acc.blockIndex,
+                        function: { arguments: event.delta.partial_json },
+                      }],
+                    },
+                  }],
+                })
+                controller.enqueue(encoder.encode(`data: ${openaiChunk}\n\n`))
+              }
+            }
+          }
+
+          // message_delta → output tokens + stop reason
+          if (event.type === 'message_delta') {
+            if (event.usage) {
+              outputTokens = event.usage.output_tokens || 0
+            }
           }
 
           // message_stop → will be handled when reader.done=true
         } catch {
-          // Ignore parse errors
+          // Ignore parse errors for incomplete JSON
         }
       }
     },

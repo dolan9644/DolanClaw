@@ -1,0 +1,14 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Bash",
+      "command": "echo \"[Hook] PreToolUse: $HOOK_TOOL_NAME\" >> /tmp/dolanclaw-hooks.log"
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "FileWrite",
+      "command": "echo \"[Hook] PostToolUse: $HOOK_TOOL_NAME wrote file\" >> /tmp/dolanclaw-hooks.log"
+    }
+  ]
+}

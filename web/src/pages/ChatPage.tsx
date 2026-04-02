@@ -22,6 +22,7 @@ interface ToolCall {
   diff?: DiffHunk[]
   elapsedMs?: number
   isExpanded: boolean
+  permissionId?: string  // Backend permission request ID for /api/chat/permission
 }
 
 interface DiffHunk {
@@ -41,11 +42,17 @@ const TOOL_META: Record<string, { icon: string; label: string; color: string }> 
   Bash:            { icon: '⚡', label: 'Bash',       color: '#f59e0b' },
   SandboxedBash:   { icon: '🔒', label: 'Sandbox',    color: '#f59e0b' },
   FileEditTool:    { icon: '✏️', label: 'Edit',        color: '#3b82f6' },
+  FileEdit:        { icon: '✏️', label: 'Edit',        color: '#3b82f6' },
   FileWriteTool:   { icon: '📝', label: 'Write',       color: '#3b82f6' },
+  FileWrite:       { icon: '📝', label: 'Write',       color: '#3b82f6' },
   FileReadTool:    { icon: '📖', label: 'Read',        color: '#8b5cf6' },
+  FileRead:        { icon: '📖', label: 'Read',        color: '#8b5cf6' },
   GlobTool:        { icon: '🔎', label: 'Glob',        color: '#8b5cf6' },
+  Glob:            { icon: '🔎', label: 'Glob',        color: '#8b5cf6' },
   GrepTool:        { icon: '🔍', label: 'Grep',        color: '#8b5cf6' },
+  Grep:            { icon: '🔍', label: 'Grep',        color: '#8b5cf6' },
   ListFilesTool:   { icon: '📁', label: 'List',        color: '#8b5cf6' },
+  ListFiles:       { icon: '📁', label: 'List',        color: '#8b5cf6' },
   SearchTool:      { icon: '🔍', label: 'Search',      color: '#8b5cf6' },
   WebSearchTool:   { icon: '🌐', label: 'Web Search',  color: '#06b6d4' },
   WebFetchTool:    { icon: '🌐', label: 'Web Fetch',   color: '#06b6d4' },
@@ -57,7 +64,14 @@ const TOOL_META: Record<string, { icon: string; label: string; color: string }> 
 }
 
 function getToolMeta(name: string) {
-  return TOOL_META[name] || { icon: '🔧', label: name, color: '#6b7280' }
+  if (TOOL_META[name]) return TOOL_META[name]
+  // MCP tool fallback: mcp__{server}__{tool}
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__')
+    const serverName = parts[1] || 'mcp'
+    return { icon: '🔌', label: `${serverName}/${parts.slice(2).join('/')}`, color: '#10b981' }
+  }
+  return { icon: '🔧', label: name, color: '#6b7280' }
 }
 
 // ─── Slash Commands ─────────────────────────────────────
@@ -305,8 +319,17 @@ function ToolCallBlock({ tc, onOpenFile }: {
   tc: ToolCall
   onOpenFile: (title: string, content: string, language?: string) => void
 }) {
-  const [expanded, setExpanded] = useState(tc.isExpanded)
+  const [expanded, setExpanded] = useState(tc.status === 'running')
   const meta = getToolMeta(tc.name)
+
+  // Auto-collapse when tool finishes
+  useEffect(() => {
+    if (tc.status === 'done' || tc.status === 'error') {
+      setExpanded(false)
+    } else if (tc.status === 'running') {
+      setExpanded(true)
+    }
+  }, [tc.status])
 
   const statusLabel = {
     queued: '排队中',
@@ -324,15 +347,35 @@ function ToolCallBlock({ tc, onOpenFile }: {
     rejected: '⛔',
   }[tc.status]
 
+  // Parse JSON input if applicable
+  let parsedCommand = ''
+  let parsedInput = tc.input
+  try {
+    const inputObj = JSON.parse(tc.input)
+    if (tc.name === 'Bash' || tc.name === 'BashTool') {
+      parsedCommand = inputObj.command || tc.input
+      parsedInput = parsedCommand
+    } else if (inputObj.path) {
+      parsedInput = inputObj.path
+    } else if (inputObj.pattern) {
+      parsedInput = inputObj.pattern + (inputObj.path ? ` in ${inputObj.path}` : '')
+    }
+  } catch {
+    // Not JSON, use as-is
+    if (tc.name === 'Bash' || tc.name === 'BashTool') {
+      parsedCommand = tc.input
+    }
+  }
+
   // Determine display text
   let displayText = tc.description || ''
   if (!displayText) {
     if (tc.name === 'BashTool' || tc.name === 'Bash') {
-      displayText = tc.input
+      displayText = parsedCommand || parsedInput
     } else if (tc.filePath) {
       displayText = tc.filePath
     } else {
-      displayText = tc.input?.slice(0, 120) || tc.name
+      displayText = parsedInput?.slice(0, 120) || tc.name
     }
   }
 
@@ -374,15 +417,15 @@ function ToolCallBlock({ tc, onOpenFile }: {
       {expanded && (
         <div className="tool-block-body animate-slide-down">
           {/* Command/Input */}
-          {tc.input && (tc.name === 'BashTool' || tc.name === 'Bash') && (
+          {(tc.name === 'BashTool' || tc.name === 'Bash') && parsedCommand && (
             <div className="tool-cmd">
               <span className="tool-cmd-prompt">$</span>
-              <code>{tc.input}</code>
+              <code>{parsedCommand}</code>
             </div>
           )}
-          {tc.input && tc.name !== 'BashTool' && tc.name !== 'Bash' && (
+          {parsedInput && tc.name !== 'BashTool' && tc.name !== 'Bash' && (
             <div className="tool-input-block">
-              <pre>{tc.input}</pre>
+              <pre>{parsedInput}</pre>
             </div>
           )}
 
@@ -420,17 +463,84 @@ function ToolCallBlock({ tc, onOpenFile }: {
   )
 }
 
+// ─── Tool Calls Summary (compact single-line) ───────────
+
+function ToolCallsSummary({ tools, lastTool, onOpenFile }: {
+  tools: ToolCall[]
+  lastTool: ToolCall
+  onOpenFile: (title: string, content: string, language?: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const totalElapsed = tools.reduce((sum, t) => sum + (t.elapsedMs || 0), 0)
+  const totalElapsedStr = totalElapsed > 1000
+    ? `${(totalElapsed / 1000).toFixed(1)}s`
+    : `${totalElapsed}ms`
+
+  const lastMeta = getToolMeta(lastTool.name)
+  let lastDesc = lastTool.description || ''
+  if (!lastDesc) {
+    try {
+      const parsed = JSON.parse(lastTool.input)
+      lastDesc = parsed.command || parsed.path || parsed.pattern || lastTool.input
+    } catch { lastDesc = lastTool.input }
+  }
+  if (lastDesc && lastDesc.length > 60) lastDesc = lastDesc.slice(0, 57) + '...'
+
+  const errorCount = tools.filter(t => t.status === 'error').length
+
+  return (
+    <div className="tool-summary">
+      <div className="tool-summary-line" onClick={() => setExpanded(!expanded)}>
+        <span className="tool-summary-icon">⚡</span>
+        <span className="tool-summary-text">
+          已执行 <strong>{tools.length}</strong> 个工具调用
+          {errorCount > 0 && <span className="tool-summary-errors"> ({errorCount} 错误)</span>}
+        </span>
+        <span className="tool-summary-separator">|</span>
+        <span className="tool-summary-last" style={{ color: lastMeta.color }}>
+          {lastMeta.label}
+        </span>
+        <span className="tool-summary-desc">{lastDesc}</span>
+        <span className="tool-summary-elapsed">{totalElapsedStr}</span>
+        <span className="tool-summary-chevron">{expanded ? '▾' : '▸'}</span>
+      </div>
+
+      {expanded && (
+        <div className="tool-summary-detail">
+          {tools.map(tc => (
+            <ToolCallBlock key={tc.id} tc={tc} onOpenFile={onOpenFile} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Context Bar ────────────────────────────────────────
 
 function ContextBar({ messages, currentModel }: {
   messages: Message[]
   currentModel: string
 }) {
-  const totalTokens = messages.reduce((sum, m) => {
+  // Real token counts from API
+  const apiTokens = messages.reduce((sum, m) => {
     return sum + (m.costInfo?.input || 0) + (m.costInfo?.output || 0)
   }, 0)
+  // Estimate from content when API doesn't provide counts
+  const estimatedTokens = apiTokens > 0
+    ? apiTokens
+    : Math.ceil(messages.reduce((sum, m) => {
+        let chars = m.content?.length || 0
+        // Count tool call content too
+        if (m.toolCalls) {
+          chars += m.toolCalls.reduce((ts, tc) =>
+            ts + (tc.output?.length || 0) + (tc.input?.length || 0), 0)
+        }
+        return sum + chars
+      }, 0) / 4)
+
   const totalCost = messages.reduce((sum, m) => sum + (m.costInfo?.cost || 0), 0)
-  const contextUsagePercent = Math.min(totalTokens / 200000 * 100, 100)
+  const contextUsagePercent = Math.min(estimatedTokens / 200000 * 100, 100)
 
   return (
     <div className="context-bar">
@@ -451,7 +561,8 @@ function ContextBar({ messages, currentModel }: {
           />
         </div>
         <span className="context-bar-value">
-          {totalTokens > 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : totalTokens}
+          {estimatedTokens > 1000 ? `${(estimatedTokens / 1000).toFixed(1)}k` : estimatedTokens}
+          {apiTokens === 0 && estimatedTokens > 0 ? '~' : ''}
         </span>
       </div>
       <div className="context-bar-divider" />
@@ -465,20 +576,44 @@ function ContextBar({ messages, currentModel }: {
 
 // ─── Main Chat Page ─────────────────────────────────────
 
+function getWorkspaceKey(wsPath: string): string {
+  return `dolanclaw-messages-${wsPath.replace(/[^a-zA-Z0-9]/g, '_')}`
+}
+
+function loadMessagesForWorkspace(wsPath: string): Message[] {
+  try {
+    // Try workspace-specific key first
+    const key = getWorkspaceKey(wsPath)
+    const saved = localStorage.getItem(key)
+    if (saved) return JSON.parse(saved)
+    // Fallback: try legacy key (non-workspace-specific)
+    const legacy = localStorage.getItem('dolanclaw-messages')
+    if (legacy) return JSON.parse(legacy)
+  } catch {}
+  return []
+}
+
+function saveMessagesForWorkspace(wsPath: string, messages: Message[]) {
+  try {
+    const key = getWorkspaceKey(wsPath)
+    const toSave = messages.slice(-100)
+    localStorage.setItem(key, JSON.stringify(toSave))
+  } catch {}
+}
+
 export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const saved = localStorage.getItem('dolanclaw-messages')
-      if (saved) return JSON.parse(saved)
-    } catch { /* ignore */ }
-    return []
-  })
+  // Track current workspace path
+  const [currentWorkspace, setCurrentWorkspace] = useState('')
+  const workspaceRef = useRef('')
+
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [thinking, setThinking] = useState('')
-  const [isThinkingVisible, setIsThinkingVisible] = useState(true)
+  const [isThinkingVisible, setIsThinkingVisible] = useState(false)
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [slashFilter, setSlashFilter] = useState('')
+  const [dynamicCommands, setDynamicCommands] = useState<Array<{ name: string; desc: string; icon: string }>>([])
   const [slashSelectedIdx, setSlashSelectedIdx] = useState(0)
   const [pendingPermission, setPendingPermission] = useState<ToolCall | null>(null)
   const [interruptable, setInterruptable] = useState(false)
@@ -503,14 +638,70 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
 
-  // Persist messages to localStorage
+  // Fetch initial workspace and load its messages
   useEffect(() => {
-    try {
-      // Only save last 100 messages to avoid quota issues
-      const toSave = messages.slice(-100)
-      localStorage.setItem('dolanclaw-messages', JSON.stringify(toSave))
-    } catch { /* ignore quota errors */ }
-  }, [messages])
+    fetch('/api/workspace')
+      .then(r => r.json())
+      .then(data => {
+        if (data.path) {
+          setCurrentWorkspace(data.path)
+          workspaceRef.current = data.path
+          setMessages(loadMessagesForWorkspace(data.path))
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // Persist messages to localStorage (per-workspace)
+  useEffect(() => {
+    if (currentWorkspace) {
+      saveMessagesForWorkspace(currentWorkspace, messages)
+    }
+  }, [messages, currentWorkspace])
+
+  // Listen for workspace changes: save current, load new
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { path: string; name: string }
+      if (detail) {
+        // Save current workspace messages before switching
+        if (workspaceRef.current) {
+          const currentMsgs = JSON.parse(
+            localStorage.getItem(getWorkspaceKey(workspaceRef.current)) || '[]'
+          )
+          // Already saved by the messages effect, but ensure latest
+          if (currentMsgs.length === 0) {
+            saveMessagesForWorkspace(workspaceRef.current, [])
+          }
+        }
+
+        // Update workspace ref
+        workspaceRef.current = detail.path
+        setCurrentWorkspace(detail.path)
+
+        // Load messages for new workspace
+        const newMsgs = loadMessagesForWorkspace(detail.path)
+
+        // Add system message about the switch
+        const sysMsg: Message = {
+          id: `ws-${Date.now()}`,
+          role: 'system',
+          content: `🔄 工作区已切换至: **${detail.name}**\n\`${detail.path}\`\n\n所有工具操作现在指向此目录。`,
+          timestamp: Date.now(),
+        }
+
+        if (newMsgs.length > 0) {
+          // Existing session — append system message
+          setMessages([...newMsgs, sysMsg])
+        } else {
+          // New workspace — start fresh with just the system message
+          setMessages([sysMsg])
+        }
+      }
+    }
+    window.addEventListener('dolanclaw-workspace-change', handler)
+    return () => window.removeEventListener('dolanclaw-workspace-change', handler)
+  }, [])
 
   // Scroll detection for scroll-to-bottom button
   useEffect(() => {
@@ -548,68 +739,57 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
   }, [])
 
   // ─── Permission Handlers ──────────────────────────────
+  // In the new agentic architecture, the BACKEND executes tools.
+  // The frontend only signals permission decisions via /api/chat/permission.
 
-  const executeToolCall = useCallback(async (tc: ToolCall) => {
-    // Parse input if it's a JSON string
-    let inputObj: Record<string, unknown> = {}
+  const sendPermissionDecision = useCallback(async (permissionId: string, decision: 'allow' | 'deny' | 'allow_all') => {
     try {
-      inputObj = typeof tc.input === 'string' ? JSON.parse(tc.input) : tc.input as unknown as Record<string, unknown>
-    } catch {
-      // If not JSON, treat as command/content
-      if (tc.name === 'BashTool' || tc.name === 'Bash') {
-        inputObj = { command: tc.input }
-      } else {
-        inputObj = { content: tc.input }
-      }
-    }
-
-    try {
-      const res = await fetch('/api/tools/execute', {
+      await fetch('/api/chat/permission', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          toolId: tc.id,
-          toolName: tc.name,
-          input: inputObj,
-        }),
+        body: JSON.stringify({ id: permissionId, decision }),
       })
-      const result = await res.json()
-
-      // Update the tool call in messages
-      setMessages(prev => prev.map(msg => {
-        if (!msg.toolCalls) return msg
-        const updatedTCs = msg.toolCalls.map(t => {
-          if (t.id !== tc.id) return t
-          return {
-            ...t,
-            status: result.error ? 'error' as const : 'done' as const,
-            output: result.error || result.output,
-            elapsedMs: result.elapsed,
-            isExpanded: true,
-          }
-        })
-        return { ...msg, toolCalls: updatedTCs }
-      }))
     } catch (err) {
-      setMessages(prev => prev.map(msg => {
-        if (!msg.toolCalls) return msg
-        const updatedTCs = msg.toolCalls.map(t => {
-          if (t.id !== tc.id) return t
-          return {
-            ...t,
-            status: 'error' as const,
-            output: err instanceof Error ? err.message : String(err),
-            isExpanded: true,
-          }
-        })
-        return { ...msg, toolCalls: updatedTCs }
-      }))
+      console.error('Failed to send permission decision:', err)
     }
   }, [])
 
   const handlePermissionAllow = useCallback(async () => {
     if (!pendingPermission) return
     const tc = pendingPermission
+    setPendingPermission(null)
+
+    // Mark as running (backend will execute and send tool_done)
+    setMessages(prev => prev.map(msg => {
+      if (!msg.toolCalls) return msg
+      return {
+        ...msg,
+        toolCalls: msg.toolCalls.map(t =>
+          t.id === tc.id ? { ...t, status: 'running' as const } : t
+        ),
+      }
+    }))
+
+    if (tc.permissionId) {
+      await sendPermissionDecision(tc.permissionId, 'allow')
+    }
+  }, [pendingPermission, sendPermissionDecision])
+
+  const handlePermissionDeny = useCallback(async () => {
+    if (!pendingPermission) return
+    const tc = pendingPermission
+    setPendingPermission(null)
+
+    // Backend will handle rejection and continue the loop
+    if (tc.permissionId) {
+      await sendPermissionDecision(tc.permissionId, 'deny')
+    }
+  }, [pendingPermission, sendPermissionDecision])
+
+  const handlePermissionAllowAll = useCallback(async () => {
+    if (!pendingPermission) return
+    const tc = pendingPermission
+    setAllowedTools(prev => new Set(prev).add(tc.name))
     setPendingPermission(null)
 
     // Mark as running
@@ -623,51 +803,41 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
       }
     }))
 
-    await executeToolCall(tc)
-  }, [pendingPermission, executeToolCall])
+    if (tc.permissionId) {
+      await sendPermissionDecision(tc.permissionId, 'allow_all')
+    }
+  }, [pendingPermission, sendPermissionDecision])
 
-  const handlePermissionDeny = useCallback(() => {
-    if (!pendingPermission) return
-    const tc = pendingPermission
-    setPendingPermission(null)
+  // Fetch dynamic slash commands from backend
+  useEffect(() => {
+    fetch('/api/commands')
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setDynamicCommands(data.map((c: { name: string; description: string }) => ({
+            name: `/${c.name}`,
+            desc: c.description,
+            icon: '📄',
+          })))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
-    setMessages(prev => prev.map(msg => {
-      if (!msg.toolCalls) return msg
-      return {
-        ...msg,
-        toolCalls: msg.toolCalls.map(t =>
-          t.id === tc.id ? { ...t, status: 'rejected' as const, output: '用户拒绝了此操作' } : t
-        ),
-      }
-    }))
-  }, [pendingPermission])
+  // Filtered slash commands (built-in + dynamic from .claude/commands/)
+  const allSlashCommands = useMemo(() => {
+    // Merge, avoiding duplicates
+    const builtinNames = new Set(SLASH_COMMANDS.map(c => c.name))
+    const extras = dynamicCommands.filter(c => !builtinNames.has(c.name))
+    return [...SLASH_COMMANDS, ...extras]
+  }, [dynamicCommands])
 
-  const handlePermissionAllowAll = useCallback(async () => {
-    if (!pendingPermission) return
-    const tc = pendingPermission
-    setAllowedTools(prev => new Set(prev).add(tc.name))
-    setPendingPermission(null)
-
-    setMessages(prev => prev.map(msg => {
-      if (!msg.toolCalls) return msg
-      return {
-        ...msg,
-        toolCalls: msg.toolCalls.map(t =>
-          t.id === tc.id ? { ...t, status: 'running' as const } : t
-        ),
-      }
-    }))
-
-    await executeToolCall(tc)
-  }, [pendingPermission, executeToolCall])
-
-  // Filtered slash commands
   const filteredSlash = useMemo(() => {
-    if (!slashFilter) return SLASH_COMMANDS
-    return SLASH_COMMANDS.filter(
+    if (!slashFilter) return allSlashCommands
+    return allSlashCommands.filter(
       c => c.name.includes(slashFilter) || c.desc.includes(slashFilter)
     )
-  }, [slashFilter])
+  }, [slashFilter, allSlashCommands])
 
   useEffect(() => {
     scrollToBottom()
@@ -756,7 +926,8 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
     if (cmd.name === '/help') {
       addSystemMessage(
         `❓ **可用命令**\n\n` +
-        SLASH_COMMANDS.map(c => `- \`${c.name}\` — ${c.desc}`).join('\n')
+        SLASH_COMMANDS.map(c => `- \`${c.name}\` — ${c.desc}`).join('\n') +
+        (dynamicCommands.length > 0 ? '\n\n**自定义命令**\n' + dynamicCommands.map(c => `- \`${c.name}\` — ${c.desc}`).join('\n') : '')
       )
       setInput('')
       return
@@ -1010,7 +1181,7 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
         return
       }
 
-      const matched = SLASH_COMMANDS.find(c => text.startsWith(c.name))
+      const matched = allSlashCommands.find(c => text.startsWith(c.name))
       if (matched) {
         selectSlashCommand(matched)
         return
@@ -1048,9 +1219,39 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
           message: text,
           planMode,
           effortLevel,
+          // Send enriched message history with tool_calls and tool results
           messages: messages
             .filter(m => m.role !== 'system')
-            .map(m => ({ role: m.role, content: m.content })),
+            .flatMap(m => {
+              const result: Array<{ role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string }> = []
+              // Assistant messages with tool calls
+              if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+                const completedTools = m.toolCalls.filter(tc => tc.status === 'done' || tc.status === 'error')
+                result.push({
+                  role: 'assistant',
+                  content: m.content,
+                  tool_calls: completedTools.map(tc => ({
+                    id: tc.id,
+                    type: 'function',
+                    function: {
+                      name: tc.name,
+                      arguments: tc.input || '{}',
+                    },
+                  })),
+                })
+                // Add tool result messages
+                for (const tc of completedTools) {
+                  result.push({
+                    role: 'tool',
+                    content: tc.output || '(no output)',
+                    tool_call_id: tc.id,
+                  })
+                }
+              } else {
+                result.push({ role: m.role, content: m.content })
+              }
+              return result
+            }),
         }),
         signal: controller.signal,
       })
@@ -1145,16 +1346,27 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
                 break
 
               case 'tool_start':
-                toolCalls.push({
-                  id: event.id,
-                  name: event.name,
-                  input: event.input || '',
-                  description: event.description || '',
-                  filePath: event.filePath || '',
-                  status: 'running',
-                  isExpanded: true,
-                })
-                updateAssistantMessage()
+                {
+                  // Check if tool already exists (from a permission_request)
+                  const existingTc = toolCalls.find(t => t.id === event.id)
+                  if (existingTc) {
+                    // Update existing tool call from permission_request
+                    existingTc.status = 'running'
+                    if (event.description) existingTc.description = event.description
+                  } else {
+                    // New tool call (auto-allowed, no prior permission_request)
+                    toolCalls.push({
+                      id: event.id,
+                      name: event.name,
+                      input: event.input || '',
+                      description: event.description || '',
+                      filePath: event.filePath || '',
+                      status: 'running',
+                      isExpanded: true,
+                    })
+                  }
+                  updateAssistantMessage()
+                }
                 break
 
               case 'tool_progress':
@@ -1172,8 +1384,8 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
                 {
                   const tc = toolCalls.find(t => t.id === event.id)
                   if (tc) {
-                    tc.status = 'done'
-                    tc.isExpanded = false
+                    tc.status = event.status === 'rejected' ? 'rejected' : 'done'
+                    tc.isExpanded = false  // Collapse completed tools
                     if (event.output) tc.output = event.output
                     if (event.diff) tc.diff = event.diff
                     if (event.elapsed) tc.elapsedMs = event.elapsed
@@ -1196,24 +1408,29 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
               case 'permission_request':
                 {
                   const newTc: ToolCall = {
-                    id: event.id,
+                    id: event.toolCallId || event.id,
                     name: event.name,
                     input: event.input || '',
                     description: event.description || '',
                     filePath: event.filePath || '',
                     status: 'queued',
                     isExpanded: true,
+                    permissionId: event.id,  // Backend permission ID
                   }
                   // Add to tool calls for rendering
                   toolCalls.push(newTc)
                   updateAssistantMessage()
 
-                  // Check if already allowed
+                  // Check if user already said "always allow" for this tool type
                   if (allowedTools.has(event.name)) {
-                    // Auto-execute
                     newTc.status = 'running'
                     updateAssistantMessage()
-                    executeToolCall(newTc)
+                    // Auto-send allow to backend
+                    fetch('/api/chat/permission', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ id: event.id, decision: 'allow_all' }),
+                    }).catch(() => {})
                   } else {
                     setPendingPermission(newTc)
                   }
@@ -1270,6 +1487,7 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
       }
     } finally {
       setIsStreaming(false)
+      setIsThinkingVisible(false) // Auto-collapse thinking panel when done
       setInterruptable(false)
       abortRef.current = null
     }
@@ -1368,9 +1586,31 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
           {/* Compact */}
           <button
             className="toolbar-btn"
-            onClick={() => addSystemMessage('📦 **上下文压缩** — 已提交压缩请求，将保留关键信息并释放 token 空间')}
+            onClick={() => {
+              if (messages.length <= 2) {
+                addSystemMessage('📦 对话太短，无需压缩')
+                return
+              }
+              const toKeep = messages.slice(-4)
+              const compacted = messages.slice(0, -4)
+              const summary = compacted.map(m => {
+                if (m.role === 'user') return `用户: ${m.content.slice(0, 80)}`
+                if (m.role === 'assistant') {
+                  const toolCount = m.toolCalls?.length || 0
+                  return `助手: ${m.content.slice(0, 80)}${toolCount ? ` [${toolCount} 工具调用]` : ''}`
+                }
+                return `系统: ${m.content.slice(0, 60)}`
+              }).join('\n')
+              const compactMsg: Message = {
+                id: crypto.randomUUID(),
+                role: 'system',
+                content: `📦 **上下文已压缩** — ${compacted.length} 条消息被摘要\n\n\`\`\`\n${summary}\n\`\`\``,
+                timestamp: Date.now(),
+              }
+              setMessages([compactMsg, ...toKeep])
+            }}
             title="压缩上下文 (/compact)"
-            disabled={messages.length === 0}
+            disabled={messages.length <= 2}
           >
             <span className="toolbar-btn-icon">📦</span>
             <span className="toolbar-btn-label">压缩</span>
@@ -1399,8 +1639,8 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
         </div>
       </div>
 
-      {/* Thinking Panel */}
-      {(thinking || isStreaming) && (
+      {/* Thinking Panel — only show when there is actual thinking content */}
+      {thinking && (
         <div className={`chat-thinking ${isThinkingVisible ? '' : 'collapsed'}`}>
           <div
             className="chat-thinking-header"
@@ -1409,12 +1649,15 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
             <div className="chat-thinking-header-left">
               {isStreaming && <div className="spinner" />}
               <span>💭 思考过程</span>
+              <span style={{ fontSize: 10, color: 'var(--text-quaternary)' }}>
+                {thinking.length > 0 ? `${Math.ceil(thinking.length / 4)} tokens` : ''}
+              </span>
             </div>
             <span className="chat-thinking-toggle">
               {isThinkingVisible ? '收起 ▾' : '展开 ▸'}
             </span>
           </div>
-          {isThinkingVisible && thinking && (
+          {isThinkingVisible && (
             <div className="chat-thinking-content">
               {thinking}
             </div>
@@ -1506,22 +1749,38 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
                         </button>
                       </div>
                     </div>
-                  ) : (
+                  ) : null}
+
+                  {/* Tool Calls — compact: only show running + summary */}
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (() => {
+                    const completedTools = msg.toolCalls.filter(tc => tc.status !== 'running' && tc.status !== 'queued')
+                    const runningTools = msg.toolCalls.filter(tc => tc.status === 'running' || tc.status === 'queued')
+                    const lastCompleted = completedTools[completedTools.length - 1]
+
+                    return (
+                      <div className="tool-calls-container tool-calls-compact">
+                        {completedTools.length > 0 && (
+                          <ToolCallsSummary
+                            tools={completedTools}
+                            lastTool={lastCompleted}
+                            onOpenFile={onOpenFile}
+                          />
+                        )}
+                        {runningTools.map(tc => (
+                          <ToolCallBlock
+                            key={tc.id}
+                            tc={tc}
+                            onOpenFile={onOpenFile}
+                          />
+                        ))}
+                      </div>
+                    )
+                  })()}
+
+                  {/* Message Content — always at the bottom */}
+                  {msg.content && (
                     <div className="message-content">
                       {renderMarkdown(msg.content)}
-                    </div>
-                  )}
-
-                  {/* Tool Calls */}
-                  {msg.toolCalls && msg.toolCalls.length > 0 && (
-                    <div className="tool-calls-container">
-                      {msg.toolCalls.map(tc => (
-                        <ToolCallBlock
-                          key={tc.id}
-                          tc={tc}
-                          onOpenFile={onOpenFile}
-                        />
-                      ))}
                     </div>
                   )}
 

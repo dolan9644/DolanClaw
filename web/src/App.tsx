@@ -11,6 +11,7 @@ import { MemoryPage } from './pages/MemoryPage'
 import { McpPage } from './pages/McpPage'
 import { SkillsAgentsPage } from './pages/SkillsAgentsPage'
 import { ToolsPage } from './pages/ToolsPage'
+import { RegistryPage } from './pages/RegistryPage'
 import { PermissionsPage, SessionsPage, SettingsPage } from './pages/MorePages'
 import { CommandPalette } from './components/CommandPalette'
 import { KeyboardShortcutsHelp } from './components/KeyboardShortcutsHelp'
@@ -19,7 +20,7 @@ import './index.css'
 export type PageId =
   | 'chat' | 'dashboard'
   | 'files' | 'diff' | 'tasks' | 'memory'
-  | 'mcp' | 'skills' | 'tools'
+  | 'mcp' | 'skills' | 'tools' | 'registry'
   | 'models' | 'permissions' | 'sessions' | 'settings'
 
 // ─── Syntax highlighting helpers ─────────────────────────
@@ -241,6 +242,8 @@ export default function App() {
         return <SkillsAgentsPage />
       case 'tools':
         return <ToolsPage />
+      case 'registry':
+        return <RegistryPage />
       case 'models':
         return (
           <ModelsPage
@@ -292,6 +295,15 @@ export default function App() {
         currentModel={currentModel}
         onModelChange={setCurrentModel}
         isOpen={sidebarOpen}
+        onWorkspaceChange={(path, name) => {
+          addToast('success', `已切换工作区至 ${name}`)
+          setCurrentPage('chat')
+          setSidebarOpen(false)
+          // Dispatch custom event so ChatPage can add a system message
+          window.dispatchEvent(new CustomEvent('dolanclaw-workspace-change', {
+            detail: { path, name },
+          }))
+        }}
       />
       <div className="main-content">
         {renderPage()}

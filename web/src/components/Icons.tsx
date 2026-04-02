@@ -59,6 +59,10 @@ export function IconWrench(p: IconProps = {}) {
   return <svg {...s(p)}><path d="M10.5 2a4 4 0 0 0-3.8 5.2L2.5 11.5v2h2l4.3-4.2A4 4 0 1 0 10.5 2z"/></svg>
 }
 
+export function IconStore(p: IconProps = {}) {
+  return <svg {...s(p)}><path d="M2 6.5L3.5 2.5h9L14 6.5"/><path d="M2 6.5c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2c0 1.1.9 2 2 2s2-.9 2-2"/><path d="M2.5 8.5v5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-5"/></svg>
+}
+
 export function IconBot(p: IconProps = {}) {
   return <svg {...s(p)}><rect x="2.5" y="4.5" width="11" height="9" rx="2"/><circle cx="5.5" cy="8.5" r="1" fill="currentColor" stroke="none"/><circle cx="10.5" cy="8.5" r="1" fill="currentColor" stroke="none"/><path d="M8 1.5v3M5.5 2.5h5"/></svg>
 }

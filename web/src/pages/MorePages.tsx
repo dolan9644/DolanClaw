@@ -163,11 +163,42 @@ export function SessionsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeId, setActiveId] = useState('')
 
-  // Load sessions from localStorage
+  // Load sessions from localStorage — detect per-workspace sessions
   useEffect(() => {
     try {
+      // Try saved sessions list first
       const saved = JSON.parse(localStorage.getItem('dolanclaw-sessions') || '[]')
-      setSessions(saved)
+      if (saved.length > 0) {
+        setSessions(saved)
+      } else {
+        // Auto-detect workspace sessions from localStorage keys
+        const detected: Session[] = []
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i)
+          if (key && key.startsWith('dolanclaw-messages-')) {
+            const path = key.replace('dolanclaw-messages-', '')
+            const name = path.split('/').pop() || path
+            try {
+              const msgs = JSON.parse(localStorage.getItem(key) || '[]')
+              if (msgs.length > 0) {
+                detected.push({
+                  id: `ws_${btoa(path).replace(/=/g, '')}`,
+                  title: name,
+                  model: msgs[msgs.length - 1]?.model || 'unknown',
+                  messages: msgs.length,
+                  cost: msgs.reduce((s: number, m: any) => s + (m.costInfo?.cost || 0), 0),
+                  startTime: msgs[0]?.timestamp
+                    ? new Date(msgs[0].timestamp).toLocaleString('zh-CN')
+                    : '未知',
+                  duration: '',
+                  status: 'saved',
+                })
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+        if (detected.length > 0) setSessions(detected)
+      }
       setActiveId(localStorage.getItem('dolanclaw-active-session') || '')
     } catch { /* ignore */ }
   }, [])

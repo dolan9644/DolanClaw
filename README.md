@@ -1,95 +1,76 @@
-# DolanClaw — Agentic 开发平台
+# DolanClaw — 本地 Agentic AI 编程平台
 
 <p align="center">
-  <strong>一个面向开发者学习与交流的 Agentic AI 开发平台</strong><br>
-  <sub>多模型调度 · MCP 工具扩展 · 技能系统 · 社区注册中心</sub><br>
+  <strong>一个本地运行的 Agentic AI 编程平台，支持多模型调度与工具扩展</strong><br>
+  <sub>自主编程 · 多模型调度 · MCP 工具生态 · 技能系统</sub><br>
   <sub>⚠️ 本项目仅供学习研究用途，请勿用于商业用途</sub>
 </p>
 
 <p align="center">
-  <a href="#项目说明">项目说明</a> •
+  <a href="#什么是-dolanclaw">什么是 DolanClaw</a> •
   <a href="#功能概览">功能概览</a> •
   <a href="#快速开始">快速开始</a> •
-  <a href="#mcp-扩展体系">MCP 扩展</a> •
+  <a href="#mcp-工具生态">MCP 工具生态</a> •
   <a href="#支持的模型">支持的模型</a> •
   <a href="#许可证">许可证</a>
 </p>
 
 ---
 
-## 项目说明
+## 什么是 DolanClaw
 
-> **⚠️ 重要声明**
->
-> 1. 本项目**仅供学习、研究和技术交流**，不得用于任何商业用途。
-> 2. 本项目基于 [Claude Code Best](https://github.com/claude-code-best/claude-code) 的开源架构进行学习性二次开发，**核心代码来自上游项目**，本项目主要贡献在于 Web UI 界面、Agentic Loop 架构和国产大模型适配层。
-> 3. 本项目与 Anthropic、OpenAI、MiniMax、DeepSeek 等模型提供商**无任何关联**，也未获得上述任何公司的授权或背书。
+DolanClaw 是一个**本地运行**的 Agentic AI 编程平台。它可以连接你喜欢的任何大语言模型，让 AI 像一个真正的编程搭档一样工作 —— 读写文件、执行命令、搜索代码、管理项目，而不仅仅是对话。
 
-> **商标声明**：本项目中提及的 MiniMax、DeepSeek、Kimi、通义千问、GLM、Claude、Gemini、GPT
-> 等均为各自公司的注册商标。本项目不包含任何上述公司的 Logo 或品牌素材，仅通过
-> 标准 API 接口进行调用。
+**核心理念：**
 
-> **数据安全**：本工具不存储任何用户数据。所有对话记录仅存在于浏览器本地 (localStorage)，
-> API 请求直接转发至用户自行配置的模型服务商，本项目不做任何中间存储或日志记录。
-> 用户应自行评估将敏感代码/数据发送至第三方 API 的风险。
-
----
-
-## 这个项目能做什么？
-
-DolanClaw 是一个**本地运行**的 Agentic AI 开发平台，对标 Claude Code 的核心扩展能力：
-
-- **Agentic Loop** — 多轮工具调用循环，Agent 可自主规划和执行复杂任务
-- **MCP 扩展** — 完整的 Model Context Protocol 支持，12+ 预置服务器一键安装
-- **技能系统** — Markdown 驱动的可复用技能模块，自动注入 System Prompt
-- **斜杠命令** — 内置 + 自定义命令补全，快速触发复杂工作流
-- **社区注册中心** — 扩展市场，一键安装 MCP 服务器和技能模板
+- **Agentic** — 不只是聊天。AI 可以自主规划任务、调用工具、多轮迭代，直到完成目标
+- **本地优先** — 所有代码和数据留在你的机器上，API Key 不经过任何第三方
+- **模型无关** — 不绑定任何一家模型提供商。MiniMax、DeepSeek、Kimi、Claude、Gemini、GPT 等均可接入
+- **可扩展** — 通过 MCP 协议接入任意外部工具，通过技能系统定义可复用的工作流
 
 ---
 
 ## 功能概览
 
-### Agentic Loop 引擎
+### AI 编程能力
 
-- 多轮工具调用循环（最多 10 轮自主迭代）
-- 内置工具 + MCP 工具混合调用
-- PreToolUse / PostToolUse 钩子拦截
-- Agent 子任务委派
+DolanClaw 的核心是一个 **Agentic Loop 引擎** —— AI 不只是回答问题，而是可以自主完成编程任务：
 
-### MCP 扩展体系
+- **读写文件** — AI 可以浏览项目目录、读取源码、创建和编辑文件
+- **执行命令** — 运行构建、测试、部署等任意 Shell 命令
+- **搜索代码** — 通过 grep / glob 在项目中精确搜索
+- **多轮迭代** — AI 执行一个动作后可以观察结果，自主决定下一步（最多 10 轮）
+- **子任务委派** — 将复杂任务拆分给子 Agent 并行处理
 
-- 基于 stdio 的 JSON-RPC 2.0 协议
-- 自动重连 + 优雅关闭
-- `mcp__{server}__{tool}` 命名空间隔离
-- 项目级 `.mcp.json` + 全局 `~/.claude/settings.json` 配置
-- 12 个预置服务器：filesystem、memory、fetch、sequential-thinking、brave-search、github、puppeteer、sqlite、postgres、slack、everything、firecrawl
+### MCP 工具生态
 
-### 技能 & 命令
+通过 [Model Context Protocol](https://modelcontextprotocol.io/) 接入外部工具，让 AI 的能力不再局限于文件系统：
 
-- 技能：`.claude/skills/*.md`，YAML Frontmatter 配置，`trigger: auto` 自动注入
-- 命令：`.claude/commands/*.md`，斜杠命令 `/xxx` 自动展开为 Prompt 模板
-- 钩子：`.claude/hooks.json`，通过 Shell 脚本拦截工具调用
+- 12+ 预置工具服务器（文件系统、知识图谱、网页搜索、GitHub、数据库等）
+- 扩展市场一键安装
+- 基于 stdio 的 JSON-RPC 2.0 通信，自动重连
+- 项目级 + 全局双层配置
+
+### 技能 & 命令系统
+
+- **技能** — Markdown 驱动的可复用知识模块，可自动注入 AI 上下文
+- **斜杠命令** — 自定义 `/xxx` 快捷命令，一键触发预设 Prompt
+- **钩子** — 工具调用前后的 Shell 拦截点，用于审计、日志、安全检查
 
 ### 多模型调度
 
-- 国内：MiniMax、DeepSeek、Kimi、通义千问、GLM
-- 国际：Claude、Gemini、GPT-4o
-- 动态模型选择器 — 只显示已配置 API Key 的模型
+- 统一接入国内外 9+ 家模型提供商
+- OpenAI 兼容格式 + Anthropic 原生适配
+- 动态模型选择器 — 只显示已配置 Key 的模型
+- SSE 流式输出，实时观察 token 生成
 
-### 开发辅助
+### 开发辅助面板
 
 - 文件浏览器（树状目录 + 语法高亮）
-- Git 变更视图（Staged / Unstaged）
-- 任务看板（Kanban 风格）
-- 记忆管理（项目/用户/团队三级）
-- 工具浏览器（试用面板 + 使用统计）
-
-### 社区注册中心
-
-- 扩展市场 — 12 个 MCP 服务器 + 5 个技能模板目录
-- 一键安装 — 自动写入 `.mcp.json` 并连接
-- API Key 引导 — 需要密钥的服务器弹出配置弹窗
-- 分类筛选 — 核心工具/搜索/开发工具/数据库/浏览器/协作/推理增强
+- Git 变更视图（Staged / Unstaged 统计）
+- 任务看板（Kanban 风格进度追踪）
+- 记忆管理（项目 / 用户 / 团队三级上下文）
+- 工具浏览器（12 个内置工具 + MCP 扩展工具的可视化试用）
 
 ### 安全特性
 
@@ -97,13 +78,7 @@ DolanClaw 是一个**本地运行**的 Agentic AI 开发平台，对标 Claude C
 - 可选的访问密钥保护（`DOLANCLAW_API_SECRET`）
 - 每 IP 请求频率限制（60 次/分钟）
 - 文件访问路径安全校验
-
-### 交互
-
-- 斜杠命令（`/clear` `/compact` `/cost` + 自定义 `.claude/commands/*.md`）
-- `@` 文件引用
-- `⌘K` 命令面板
-- 浅色/深色主题切换
+- 工具调用钩子拦截
 
 ---
 
@@ -166,7 +141,11 @@ cd web && npm run dev
 
 ---
 
-## MCP 扩展体系
+## MCP 工具生态
+
+### 什么是 MCP
+
+[Model Context Protocol](https://modelcontextprotocol.io/) 是一个开放标准，让 AI 模型能够安全地访问外部工具和数据源。DolanClaw 完整实现了 MCP 客户端，你可以轻松接入社区中大量的 MCP 服务器。
 
 ### 项目配置
 
@@ -187,43 +166,26 @@ cd web && npm run dev
 }
 ```
 
-### 快速安装
+### 通过扩展市场安装
 
-通过扩展市场一键安装，或手动添加：
-
-```bash
-# API 安装
-curl -X POST http://localhost:3000/api/registry/install-mcp \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "brave-search", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-brave-search"], "env": {"BRAVE_API_KEY": "your_key"}}'
-```
-
-### 工具命名
-
-MCP 工具在 Agentic Loop 中以 `mcp__{server}__{tool}` 格式注册：
-
-```
-mcp__filesystem__read_file
-mcp__memory__create_entities
-mcp__brave-search__web_search
-```
+打开侧边栏「扩展市场」，浏览分类目录，点击「安装」即可。需要 API Key 的服务器会弹出配置弹窗。
 
 ### 预置服务器
 
 | 服务器 | 类别 | 说明 |
 |--------|------|------|
-| filesystem | 核心工具 | 安全的文件系统操作 |
-| memory | 核心工具 | 知识图谱持久化记忆 |
+| filesystem | 核心工具 | 安全的文件系统读写操作 |
+| memory | 核心工具 | 基于知识图谱的持久化记忆 |
 | fetch | 核心工具 | HTTP 请求工具 |
-| sequential-thinking | 推理增强 | 结构化思维链推理 |
-| brave-search | 搜索 | Brave 搜索引擎 |
-| github | 开发工具 | GitHub API 操作 |
-| puppeteer | 浏览器 | 浏览器自动化 |
-| sqlite | 数据库 | SQLite 数据库操作 |
-| postgres | 数据库 | PostgreSQL 操作 |
-| slack | 协作 | Slack 消息管理 |
-| firecrawl | 搜索 | 高级网页爬虫 |
-| everything | 开发测试 | MCP 测试参考服务器 |
+| sequential-thinking | 推理增强 | 结构化思维链，复杂问题分步推理 |
+| brave-search | 搜索 | Brave 搜索引擎集成 |
+| github | 开发工具 | GitHub 仓库 / Issue / PR 操作 |
+| puppeteer | 浏览器 | 浏览器自动化（截图、爬虫） |
+| sqlite | 数据库 | SQLite 数据库查询和管理 |
+| postgres | 数据库 | PostgreSQL 只读查询 |
+| slack | 协作 | Slack 消息发送和频道管理 |
+| firecrawl | 搜索 | 高级网页爬虫，结构化数据提取 |
+| everything | 测试 | MCP 参考服务器，用于开发测试 |
 
 ---
 
@@ -248,7 +210,7 @@ trigger: auto
 - 可维护性
 ```
 
-`trigger: auto` 的技能会自动注入到 System Prompt。
+`trigger: auto` 的技能会自动注入到 AI 的上下文中。
 
 ### 创建命令
 
@@ -267,7 +229,7 @@ $ARGUMENTS
 
 ### 配置钩子
 
-在 `.claude/hooks.json` 配置工具拦截规则：
+在 `.claude/hooks.json` 配置工具调用拦截：
 
 ```json
 {
@@ -304,13 +266,14 @@ $ARGUMENTS
 ## 技术架构
 
 ```
-浏览器 (React)  ──HTTP──>  后端 (Bun)  ──HTTPS──>  各模型 API
-      │                      │                        ↑
-      │                      ├── McpManager ──stdio──> MCP 服务器
-      │                      ├── Agentic Loop          ↑
-      │                      ├── Hooks 拦截       Key 仅在此处
-      │                      └── Skills/Commands
-  不接触 Key
+浏览器 (React + Vite)
+    │
+    ├── 对话界面 ──SSE──> 后端 (Bun) ──HTTPS──> 各模型 API
+    │                      │
+    ├── 开发面板            ├── Agentic Loop（多轮工具调用引擎）
+    │                      ├── McpManager（MCP 服务器管理）
+    └── 扩展市场            ├── Skills / Commands / Hooks
+                           └── 文件系统 / Git / 任务管理
 ```
 
 | 层级 | 技术 |
@@ -318,34 +281,11 @@ $ARGUMENTS
 | 前端 | React 18 + TypeScript + Vite |
 | 样式 | Vanilla CSS 设计系统 |
 | 字体 | Outfit + JetBrains Mono |
-| 图标 | SVG 描边图标系统（16x16, stroke-based） |
+| 图标 | SVG 描边图标系统 |
 | 后端 | Bun |
 | API 协议 | OpenAI 兼容 + Anthropic 原生 |
 | 流式传输 | Server-Sent Events (SSE) |
-| MCP 协议 | JSON-RPC 2.0 over stdio |
-| 工具系统 | 内置 12 工具 + MCP 动态扩展 |
-
-### 后端 API 端点
-
-| 路径 | 方法 | 说明 |
-|------|------|------|
-| `/api/chat` | POST | 流式对话（SSE） |
-| `/api/agents/:name/run` | POST | Agentic Loop 执行 |
-| `/api/tools` | GET | 工具列表（内置 + MCP） |
-| `/api/tools/execute` | POST | 单次工具执行 |
-| `/api/mcp/status` | GET | MCP 服务器状态 |
-| `/api/mcp/connect` | POST | 连接 MCP 服务器 |
-| `/api/mcp/disconnect` | POST | 断开连接 |
-| `/api/mcp/restart` | POST | 重启服务器 |
-| `/api/mcp/add` | POST | 添加新服务器 |
-| `/api/skills` | GET | 技能列表 |
-| `/api/skills/toggle` | PUT | 启用/禁用技能 |
-| `/api/commands` | GET | 斜杠命令列表 |
-| `/api/hooks` | GET/PUT | 钩子配置 |
-| `/api/registry` | GET | 扩展市场目录 |
-| `/api/registry/install-mcp` | POST | 一键安装 MCP |
-| `/api/registry/install-skill` | POST | 安装技能模板 |
-| `/api/models` | GET | 可用模型列表 |
+| MCP | JSON-RPC 2.0 over stdio |
 
 ---
 
@@ -355,6 +295,13 @@ $ARGUMENTS
 2. 使用各模型 API 产生的费用由使用者自行承担。
 3. 本项目作者不对因使用本项目而产生的任何直接或间接损失负责。
 4. 使用者应遵守各模型提供商的使用条款和当地法律法规。
+
+> **商标声明**：本项目中提及的 MiniMax、DeepSeek、Kimi、通义千问、GLM、Claude、Gemini、GPT
+> 等均为各自公司的注册商标。本项目仅通过标准 API 接口进行调用，不包含任何上述公司的
+> Logo 或品牌素材。
+
+> **数据安全**：本工具不存储任何用户数据。所有对话记录仅存在于浏览器本地，API
+> 请求直接转发至用户自行配置的模型服务商，本项目不做任何中间存储或日志记录。
 
 ---
 
@@ -368,8 +315,7 @@ $ARGUMENTS
 
 ## 致谢
 
-- [Claude Code Best](https://github.com/claude-code-best/claude-code) — 核心架构来源
-- [Model Context Protocol](https://modelcontextprotocol.io/) — MCP 协议规范
+- [Model Context Protocol](https://modelcontextprotocol.io/) — MCP 开放协议
 - [Outfit](https://fonts.google.com/specimen/Outfit) — UI 字体
 - [JetBrains Mono](https://www.jetbrains.com/mono/) — 等宽代码字体
 

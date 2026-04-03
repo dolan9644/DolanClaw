@@ -2596,12 +2596,14 @@ async function handleChat(
     systemContent += '\n\n<effort>提供全面、深入的分析。考虑边界情况、替代方案和影响。给出详细的代码示例和解释。</effort>'
   }
 
-  // ── 技能注入 (Skills injection) ──
-  // Scan .claude/skills/*.md and inject active auto-trigger skills into system prompt
+  // ── 技能与组件注入 (Skills & Components injection) ──
+  // Scan .claude/skills and other directories to inject active auto-trigger skills into system prompt
   try {
-    const skillDirs = [
-      { dir: join(workingDirectory, '.claude', 'skills'), source: 'project' },
-      { dir: join(process.env.HOME || '~', '.claude', 'skills'), source: 'user' },
+    const scanDirs = [
+      { dir: join(workingDirectory, '.claude', 'skills'), type: 'skill' },
+      { dir: join(process.env.HOME || '~', '.claude', 'skills'), type: 'skill' },
+      { dir: join(workingDirectory, '.claude', 'agents'), type: 'agent' },
+      { dir: join(workingDirectory, '.claude', 'commands'), type: 'command' },
     ]
     const disabledPath = join(process.env.HOME || '~', '.claude', 'disabled-skills.json')
     let disabledSet: Set<string> = new Set()
@@ -2610,33 +2612,65 @@ async function handleChat(
     }
 
     const skillContents: string[] = []
-    for (const { dir } of skillDirs) {
+    const availableComponents: string[] = []
+
+    for (const { dir, type } of scanDirs) {
       if (!existsSync(dir)) continue
-      const files = readdirSync(dir).filter(f => f.endsWith('.md'))
-      for (const f of files) {
-        const filePath = join(dir, f)
-        if (disabledSet.has(filePath)) continue
-        const raw = readFileSync(filePath, 'utf-8')
-        // Parse frontmatter
-        const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
-        let trigger = 'auto'
-        let content = raw
-        let name = f.replace(/\.md$/, '')
-        if (fmMatch) {
-          const fm = fmMatch[1]
-          content = fmMatch[2]
-          const trigMatch = fm.match(/trigger:\s*(.+)/)
-          const nameMatch = fm.match(/name:\s*(.+)/)
-          if (trigMatch) trigger = trigMatch[1].trim()
-          if (nameMatch) name = nameMatch[1].trim()
+      const entries = readdirSync(dir, { withFileTypes: true })
+      
+      for (const entry of entries) {
+        let skillFilePath = ''
+        let skillName = ''
+        
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          // Native flat .md skill/agent/command
+          skillFilePath = join(dir, entry.name)
+          skillName = entry.name.replace(/\.md$/, '')
+        } else if (entry.isDirectory()) {
+          // ECC-style subdirectory (check for SKILL.md or AGENT.md etc)
+          const subFiles = readdirSync(join(dir, entry.name))
+          const targetFile = subFiles.find(f => f.toLowerCase() === 'skill.md' || f.toLowerCase() === 'agent.md' || f.toLowerCase() === 'command.md')
+          if (targetFile) {
+            skillFilePath = join(dir, entry.name, targetFile)
+            skillName = entry.name
+          }
         }
-        if (trigger === 'auto') {
-          skillContents.push(`<skill name="${name}">\n${content.trim()}\n</skill>`)
-        }
+
+        if (!skillFilePath || disabledSet.has(skillFilePath)) continue
+
+        try {
+          const raw = readFileSync(skillFilePath, 'utf-8')
+          // Parse frontmatter
+          const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
+          let trigger = (type === 'skill') ? 'auto' : 'manual' // Default to auto for skills, manual for agents/cmds
+          let content = raw
+          let name = skillName
+          
+          if (fmMatch) {
+            const fm = fmMatch[1]
+            content = fmMatch[2]
+            const trigMatch = fm.match(/trigger:\s*(.+)/)
+            const nameMatch = fm.match(/name:\s*(.+)/)
+            if (trigMatch) trigger = trigMatch[1].trim()
+            if (nameMatch) name = nameMatch[1].trim()
+          }
+
+          // Auto-trigger skills go directly into the prompt
+          if (trigger === 'auto' || trigger === 'always') {
+            skillContents.push(`<skill name="${name}" type="${type}">\n${content.trim()}\n</skill>`)
+          } else {
+            // Log as available capability
+            availableComponents.push(`${type}: ${name}`)
+          }
+        } catch {}
       }
     }
+
     if (skillContents.length > 0) {
-      systemContent += `\n\n<skills>\n${skillContents.join('\n')}\n</skills>`
+      systemContent += `\n\n<active_skills>\n${skillContents.join('\n')}\n</active_skills>`
+    }
+    if (availableComponents.length > 0) {
+      systemContent += `\n\n<available_capabilities>\nYou have access to the following project-specific components (trigger them if relevant or mention to user):\n${availableComponents.join(', ')}\n</available_capabilities>`
     }
   } catch { /* ignore skill injection errors */ }
 

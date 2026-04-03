@@ -75,6 +75,115 @@ function setWorkingDirectory(newDir: string): { ok: boolean; error?: string } {
   return { ok: true }
 }
 
+// ─── Resource Discovery Helpers ─────────────────────
+
+interface DiscoveredResource {
+  name: string
+  type: 'skill' | 'agent' | 'command'
+  source: 'project' | 'user' | 'builtin'
+  filePath: string
+  content: string
+  trigger: string
+  description: string
+  active: boolean
+}
+
+function parseResourceFile(filePath: string, raw: string, source: 'project' | 'user', type: 'skill' | 'agent' | 'command', defaultName: string): DiscoveredResource {
+  const disabledPath = join(homedir(), '.claude', 'disabled-skills.json')
+  let disabledSet: Set<string> = new Set()
+  if (existsSync(disabledPath)) {
+    try { disabledSet = new Set(JSON.parse(readFileSync(disabledPath, 'utf-8'))) } catch {}
+  }
+
+  let name = defaultName
+  let description = ''
+  let trigger = (type === 'skill') ? 'auto' : 'always'
+  let content = raw
+
+  const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
+  if (fmMatch) {
+    const fm = fmMatch[1]
+    content = fmMatch[2]
+    const nameMatch = fm.match(/name:\s*(.+)/)
+    const descMatch = fm.match(/description:\s*(.+)/)
+    const trigMatch = fm.match(/trigger:\s*(.+)/)
+    if (nameMatch) name = nameMatch[1].trim()
+    if (descMatch) description = descMatch[1].trim()
+    if (trigMatch) trigger = trigMatch[1].trim()
+  } else {
+    const firstLine = raw.split('\n').find(l => l.trim() && !l.startsWith('#'))
+    if (firstLine) description = firstLine.trim().slice(0, 100)
+  }
+
+  if (type === 'agent' && !description) description = `专家代理: ${name}`
+  if (type === 'command' && !description) description = `指令: /${name}`
+
+  return {
+    name, source, type, description, trigger,
+    active: !disabledSet.has(filePath),
+    filePath,
+    content: content.trim(),
+  }
+}
+
+function discoverResources(): DiscoveredResource[] {
+  const resources: DiscoveredResource[] = []
+  const scanDirs = [
+    { dir: join(workingDirectory, '.claude', 'skills'), type: 'skill' as const, source: 'project' as const },
+    { dir: join(homedir(), '.claude', 'skills'), type: 'skill' as const, source: 'user' as const },
+    { dir: join(homedir(), '.openclaw'), type: 'skill' as const, source: 'user' as const },
+    { dir: join(workingDirectory, '.claude', 'agents'), type: 'agent' as const, source: 'project' as const },
+    { dir: join(homedir(), '.claude', 'agents'), type: 'agent' as const, source: 'user' as const },
+    { dir: join(workingDirectory, '.claude', 'commands'), type: 'command' as const, source: 'project' as const },
+    { dir: join(homedir(), '.claude', 'commands'), type: 'command' as const, source: 'user' as const },
+  ]
+
+  for (const { dir, type, source } of scanDirs) {
+    if (!existsSync(dir)) continue
+    try {
+      const entries = readdirSync(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        let targetPath = ''
+        let resourceName = ''
+
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          targetPath = join(dir, entry.name)
+          resourceName = entry.name.replace(/\.md$/, '')
+        } else if (entry.isDirectory()) {
+          const subFiles = readdirSync(join(dir, entry.name))
+          const mainFile = subFiles.find(f => {
+            const fl = f.toLowerCase()
+            return fl === 'skill.md' || fl === 'agent.md' || fl === 'command.md'
+          })
+          if (mainFile) {
+            targetPath = join(dir, entry.name, mainFile)
+            resourceName = entry.name
+          }
+        }
+
+        if (targetPath) {
+          try {
+            const raw = readFileSync(targetPath, 'utf-8')
+            resources.push(parseResourceFile(targetPath, raw, source, type, resourceName))
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  // Built-in parity with native Claude Code
+  resources.push({
+    name: 'code-review', source: 'builtin', type: 'skill', trigger: 'auto', active: true, filePath: '',
+    description: '代码审查最佳实践', content: '当用户要求审查代码时，分析代码质量、安全性、性能和可维护性。'
+  })
+  resources.push({
+    name: 'git-workflow', source: 'builtin', type: 'skill', trigger: 'auto', active: true, filePath: '',
+    description: 'Git 提交工作流', content: '当用户操作 Git 时，遵循 conventional commits 规范，先 git diff 检查变更再提交。'
+  })
+
+  return resources
+}
+
 // ─── Tool Definitions (OpenAI function calling format) ──
 
 const TOOL_DEFINITIONS: OpenAITool[] = [
@@ -1069,11 +1178,7 @@ async function handleApiRequest(
     const mcpDeleteMatch = path.match(/^\/api\/mcp\/([^/]+)$/)
     if (mcpDeleteMatch && method === 'DELETE') {
       const serverName = decodeURIComponent(mcpDeleteMatch[1])
-
-      // Disconnect first
       await mcpManager.disconnect(serverName)
-
-      // Remove from .mcp.json
       const mcpJsonPath = join(workingDirectory, '.mcp.json')
       if (existsSync(mcpJsonPath)) {
         try {
@@ -1082,154 +1187,17 @@ async function handleApiRequest(
             delete mcpConfig.mcpServers[serverName]
             writeFileSync(mcpJsonPath, JSON.stringify(mcpConfig, null, 2), 'utf-8')
           }
-        } catch { /* ignore */ }
+        } catch {}
       }
-
       return Response.json({ ok: true, name: serverName }, { headers: corsHeaders })
     }
+
     // ─── Skills API ─────────────────────────────────────
 
-    // GET /api/skills — Scan .claude/skills/*.md from project + user dirs
+    // GET /api/skills — Unified scan results for UI
     if (path === '/api/skills' && method === 'GET') {
-      interface SkillEntry {
-        name: string
-        source: 'project' | 'user' | 'builtin'
-        description: string
-        trigger: string
-        active: boolean
-        filePath: string
-        content: string
-      }
-
-      const skills: SkillEntry[] = []
-
-      // Check disabled state
-      const disabledPath = join(process.env.HOME || '~', '.claude', 'disabled-skills.json')
-      let disabledSet: Set<string> = new Set()
-      if (existsSync(disabledPath)) {
-        try { disabledSet = new Set(JSON.parse(readFileSync(disabledPath, 'utf-8'))) } catch {}
-      }
-
-      const parseSkillFile = (filePath: string, raw: string, source: 'project' | 'user', defaultName: string): SkillEntry => {
-        let name = defaultName
-        let description = ''
-        let trigger = 'auto'
-        let content = raw
-
-        const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
-        if (fmMatch) {
-          const fm = fmMatch[1]
-          content = fmMatch[2]
-          const nameMatch = fm.match(/name:\s*(.+)/)
-          const descMatch = fm.match(/description:\s*(.+)/)
-          const trigMatch = fm.match(/trigger:\s*(.+)/)
-          if (nameMatch) name = nameMatch[1].trim()
-          if (descMatch) description = descMatch[1].trim()
-          if (trigMatch) trigger = trigMatch[1].trim()
-        } else {
-          const firstLine = raw.split('\n').find(l => l.trim() && !l.startsWith('#'))
-          if (firstLine) description = firstLine.trim().slice(0, 100)
-        }
-
-        return {
-          name, source, description, trigger,
-          active: !disabledSet.has(filePath),
-          filePath,
-          content: content.trim(),
-        }
-      }
-
-      const scanSkillsDir = (dir: string, source: 'project' | 'user') => {
-        if (!existsSync(dir)) return
-        try {
-          const entries = readdirSync(dir)
-          for (const entry of entries) {
-            const fullPath = join(dir, entry)
-            const stat = statSync(fullPath)
-
-            if (stat.isFile() && entry.endsWith('.md')) {
-              // Flat .md file
-              const raw = readFileSync(fullPath, 'utf-8')
-              skills.push(parseSkillFile(fullPath, raw, source, entry.replace(/\.md$/, '')))
-            } else if (stat.isDirectory()) {
-              // Subdirectory — check for SKILL.md (ECC format)
-              const skillMd = join(fullPath, 'SKILL.md')
-              if (existsSync(skillMd)) {
-                const raw = readFileSync(skillMd, 'utf-8')
-                skills.push(parseSkillFile(skillMd, raw, source, entry))
-              }
-            }
-          }
-        } catch { /* ignore */ }
-      }
-
-      // Scan agents/ directory (treat .md files as agent-type skills)
-      const scanAgentsDir = (dir: string, source: 'project' | 'user') => {
-        if (!existsSync(dir)) return
-        try {
-          const files = readdirSync(dir).filter(f => f.endsWith('.md'))
-          for (const f of files) {
-            const filePath = join(dir, f)
-            const raw = readFileSync(filePath, 'utf-8')
-            const entry = parseSkillFile(filePath, raw, source, f.replace(/\.md$/, ''))
-            entry.trigger = 'agent'
-            if (!entry.description) entry.description = `代理: ${entry.name}`
-            skills.push(entry)
-          }
-        } catch { /* ignore */ }
-      }
-
-      // Scan commands/ directory
-      const scanCommandsDir = (dir: string, source: 'project' | 'user') => {
-        if (!existsSync(dir)) return
-        try {
-          const files = readdirSync(dir).filter(f => f.endsWith('.md'))
-          for (const f of files) {
-            const filePath = join(dir, f)
-            const raw = readFileSync(filePath, 'utf-8')
-            const entry = parseSkillFile(filePath, raw, source, f.replace(/\.md$/, ''))
-            entry.trigger = 'command'
-            if (!entry.description) entry.description = `命令: /${entry.name}`
-            skills.push(entry)
-          }
-        } catch { /* ignore */ }
-      }
-
-      // Project .claude/ directories
-      const projectClaude = join(workingDirectory, '.claude')
-      scanSkillsDir(join(projectClaude, 'skills'), 'project')
-      scanAgentsDir(join(projectClaude, 'agents'), 'project')
-      scanCommandsDir(join(projectClaude, 'commands'), 'project')
-
-      // User ~/.claude/ directories
-      const userClaude = join(process.env.HOME || '~', '.claude')
-      scanSkillsDir(join(userClaude, 'skills'), 'user')
-      scanAgentsDir(join(userClaude, 'agents'), 'user')
-      scanCommandsDir(join(userClaude, 'commands'), 'user')
-
-      // Built-in default skills
-      const builtinSkills: SkillEntry[] = [
-        {
-          name: 'code-review',
-          source: 'builtin',
-          description: '代码审查最佳实践',
-          trigger: 'auto',
-          active: true,
-          filePath: '',
-          content: '当用户要求审查代码时，分析代码质量、安全性、性能和可维护性。',
-        },
-        {
-          name: 'git-workflow',
-          source: 'builtin',
-          description: 'Git 提交工作流',
-          trigger: 'auto',
-          active: true,
-          filePath: '',
-          content: '当用户操作 Git 时，遵循 conventional commits 规范，先 git diff 检查变更再提交。',
-        },
-      ]
-
-      return Response.json([...skills, ...builtinSkills], { headers: corsHeaders })
+      const resources = discoverResources()
+      return Response.json(resources, { headers: corsHeaders })
     }
 
     // PUT /api/skills/toggle — Toggle skill active state
@@ -2271,13 +2239,12 @@ async function handleApiRequest(
     if (path === '/api/agents' && method === 'GET') {
       const agents = Object.values(agentStates).map(a => ({
         ...a,
-        // Don't send full history output in listing — trim it
         history: a.history.map(h => ({ ...h, outputPreview: h.outputPreview.slice(0, 200) })),
       }))
       return Response.json(agents, { headers: corsHeaders })
     }
 
-    // POST /api/agents/:name/run — Run an agent (delegates to chat)
+    // POST /api/agents/:name/run — Run an agent (multi-turn loop)
     const agentRunMatch = path.match(/^\/api\/agents\/([^/]+)\/run$/)
     if (agentRunMatch && method === 'POST') {
       const agentName = decodeURIComponent(agentRunMatch[1])
@@ -2291,40 +2258,27 @@ async function handleApiRequest(
         return Response.json({ error: '请输入任务描述' }, { status: 400, headers: corsHeaders })
       }
 
-      // Mark as running
       agent.status = 'running'
-
       const startTime = Date.now()
       const runId = `run-${Date.now()}`
 
       try {
-        // Get model config
         const config = getOpenAIModelConfig(agent.config.model)
-        if (!config) {
-          throw new Error(`模型不可用: ${agent.config.model}`)
-        }
+        if (!config) throw new Error(`模型不可用: ${agent.config.model}`)
         const apiKey = getModelApiKey(config)
-        if (!apiKey) {
-          throw new Error(`API Key 未配置: ${config.apiKeyEnvVar}`)
-        }
+        if (!apiKey) throw new Error(`API Key 未配置: ${config.apiKeyEnvVar}`)
 
-        // Build agent-specific system prompt
         const systemContent = [
           agent.config.systemPrompt,
-          `\n你是 DolanClaw 的 ${agentName} 代理。`,
+          `\n你是 DolanClaw 的 ${agentName} 专家代理。`,
           `可用工具: ${agent.config.tools.join(', ')}`,
           `请直接执行用户给出的任务，使用工具完成操作后输出结果。`,
         ].join('\n')
 
-        // ── Agent Agentic Loop (multi-turn tool execution) ──
         const agentToolDefs: OpenAITool[] = agent.config.tools
-          .map(toolName => {
-            const toolDef = TOOL_DEFINITIONS.find(t => t.function.name === toolName)
-            return toolDef || null
-          })
+          .map(toolName => TOOL_DEFINITIONS.find(t => t.function.name === toolName) || null)
           .filter((t): t is OpenAITool => t !== null)
 
-        // Also add MCP tools if agent has mcp tools configured
         const mcpAgentTools = mcpManager.getAllTools()
           .filter(t => agent.config.tools.includes(t.fullName))
           .map(t => ({
@@ -2337,76 +2291,66 @@ async function handleApiRequest(
           }))
 
         const allAgentTools = [...agentToolDefs, ...mcpAgentTools]
-
         const agentMessages: OpenAIChatMessage[] = [
           { role: 'system', content: systemContent },
           { role: 'user', content: body.task },
         ]
 
-        const MAX_AGENT_ITERATIONS = 10
         let agentOutput = ''
         let totalInputTok = 0
         let totalOutputTok = 0
 
-        for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
-          const response = await openaiChatCompletion(
-            {
-              model: config.modelId,
-              messages: agentMessages.map(m => {
-                if (m.role === 'tool') return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id || '' }
-                if (m.role === 'assistant' && m.tool_calls) {
-                  return {
-                    role: 'assistant' as const,
-                    content: m.content || null,
-                    tool_calls: m.tool_calls.map(tc => ({
-                      id: tc.id,
-                      type: 'function' as const,
-                      function: { name: tc.function.name, arguments: tc.function.arguments },
-                    })),
-                  }
+        for (let iteration = 0; iteration < 10; iteration++) {
+          const response = await openaiChatCompletion({
+            model: config.modelId,
+            messages: agentMessages.map(m => {
+              if (m.role === 'tool') return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id || '' }
+              if (m.role === 'assistant' && m.tool_calls) {
+                return {
+                  role: 'assistant' as const,
+                  content: m.content || null,
+                  tool_calls: m.tool_calls.map(tc => ({
+                    id: tc.id,
+                    type: 'function' as const,
+                    function: { name: tc.function.name, arguments: tc.function.arguments },
+                  })),
                 }
-                return { role: m.role as 'system' | 'user' | 'assistant', content: m.content }
-              }),
-              max_tokens: Math.min(config.maxOutputTokens, 8192),
-              tools: allAgentTools.length > 0 ? allAgentTools : undefined,
-            },
-            { modelKey: agent.config.model },
-          )
+              }
+              return { role: m.role as 'system' | 'user' | 'assistant', content: m.content }
+            }),
+            max_tokens: Math.min(config.maxOutputTokens, 8192),
+            tools: allAgentTools.length > 0 ? allAgentTools : undefined,
+          }, { modelKey: agent.config.model })
 
           totalInputTok += response.usage?.prompt_tokens || 0
           totalOutputTok += response.usage?.completion_tokens || 0
-
           const choice = response.choices?.[0]
           if (!choice) break
 
           const assistantMsg = choice.message
-          const toolCalls = assistantMsg.tool_calls
-
-          if (!toolCalls || toolCalls.length === 0) {
-            // No tool calls — final response
+          if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
             agentOutput = assistantMsg.content || '(无输出)'
             break
           }
 
-          // Has tool calls — execute them
           agentMessages.push({
             role: 'assistant',
             content: assistantMsg.content || '',
-            tool_calls: toolCalls.map(tc => ({
+            tool_calls: assistantMsg.tool_calls.map(tc => ({
               id: tc.id,
               type: 'function' as const,
               function: { name: tc.function.name, arguments: tc.function.arguments },
             })),
           })
 
-          for (const tc of toolCalls) {
+          for (const tc of assistantMsg.tool_calls) {
             try {
               const args = JSON.parse(tc.function.arguments || '{}')
-              const result = await executeToolForLoop(tc.function.name, args)
+              const res = await executeToolForLoop(tc.function.name, args)
               agentMessages.push({
                 role: 'tool',
                 tool_call_id: tc.id,
-                content: typeof result === 'string' ? result : JSON.stringify(result),
+                content: typeof res === 'string' ? res : JSON.stringify(res),
               })
             } catch (err) {
               agentMessages.push({
@@ -2416,21 +2360,9 @@ async function handleApiRequest(
               })
             }
           }
-
-          // If last iteration, force a text response
-          if (iteration === MAX_AGENT_ITERATIONS - 1) {
-            agentOutput = assistantMsg.content || '(达到最大迭代次数)'
-          }
         }
 
-        if (!agentOutput) agentOutput = '(无输出)'
-
         const durationMs = Date.now() - startTime
-        const cost = (totalInputTok / 1_000_000) * config.costPer1MInput +
-                     (totalOutputTok / 1_000_000) * config.costPer1MOutput
-        recordRequest(config.displayName, totalInputTok, totalOutputTok, cost, durationMs)
-
-        // Update agent state
         agent.status = 'completed'
         agent.lastRun = new Date().toISOString()
         agent.history.unshift({
@@ -2449,36 +2381,12 @@ async function handleApiRequest(
           agentName,
           status: 'completed',
           output: agentOutput,
-          durationMs,
-          inputTokens: totalInputTok,
-          outputTokens: totalOutputTok,
-          cost,
         }, { headers: corsHeaders })
 
       } catch (err) {
-        const durationMs = Date.now() - startTime
-        const errorMsg = err instanceof Error ? err.message : String(err)
-
         agent.status = 'error'
-        agent.lastRun = new Date().toISOString()
-        agent.history.unshift({
-          id: runId,
-          time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
-          task: body.task.slice(0, 100),
-          status: 'error',
-          durationMs,
-          outputPreview: errorMsg.slice(0, 500),
-        })
-        if (agent.history.length > 20) agent.history.length = 20
         saveAgentStates(agentStates)
-
-        return Response.json({
-          id: runId,
-          agentName,
-          status: 'error',
-          error: errorMsg,
-          durationMs,
-        }, { status: 500, headers: corsHeaders })
+        return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500, headers: corsHeaders })
       }
     }
 
@@ -2487,34 +2395,18 @@ async function handleApiRequest(
     if (agentConfigMatch && method === 'PUT') {
       const agentName = decodeURIComponent(agentConfigMatch[1])
       const agent = agentStates[agentName]
-      if (!agent) {
-        return Response.json({ error: `代理不存在: ${agentName}` }, { status: 404, headers: corsHeaders })
-      }
-
-      const body = await req.json() as {
-        model?: string
-        tools?: string[]
-        systemPrompt?: string
-      }
-
+      if (!agent) return Response.json({ error: `代理不存在: ${agentName}` }, { status: 404, headers: corsHeaders })
+      const body = await req.json() as Partial<AgentState['config']>
       if (body.model) agent.config.model = body.model
       if (body.tools) agent.config.tools = body.tools
       if (body.systemPrompt !== undefined) agent.config.systemPrompt = body.systemPrompt
-
       saveAgentStates(agentStates)
-
       return Response.json({ ok: true, config: agent.config }, { headers: corsHeaders })
     }
 
-    return Response.json(
-      { error: 'Not Found' },
-      { status: 404, headers: corsHeaders },
-    )
+    return Response.json({ error: 'Not Found' }, { status: 404, headers: corsHeaders })
   } catch (err) {
-    return Response.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500, headers: corsHeaders },
-    )
+    return Response.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500, headers: corsHeaders })
   }
 }
 
@@ -2596,101 +2488,39 @@ async function handleChat(
     systemContent += '\n\n<effort>提供全面、深入的分析。考虑边界情况、替代方案和影响。给出详细的代码示例和解释。</effort>'
   }
 
-  // ── 技能与组件注入 (Skills & Components injection) ──
-  // Scan .claude/skills and other directories to inject active auto-trigger skills into system prompt
+  // ── 统一组件发现与注入 (Unified Component Discovery & Injection) ──
   try {
-    const scanDirs = [
-      { dir: join(workingDirectory, '.claude', 'skills'), type: 'skill' },
-      { dir: join(process.env.HOME || '~', '.claude', 'skills'), type: 'skill' },
-      { dir: join(workingDirectory, '.claude', 'agents'), type: 'agent' },
-      { dir: join(workingDirectory, '.claude', 'commands'), type: 'command' },
-    ]
-    const disabledPath = join(process.env.HOME || '~', '.claude', 'disabled-skills.json')
-    let disabledSet: Set<string> = new Set()
-    if (existsSync(disabledPath)) {
-      try { disabledSet = new Set(JSON.parse(readFileSync(disabledPath, 'utf-8'))) } catch {}
-    }
+    const resources = discoverResources()
+    const activeSkills: string[] = []
+    const availableCaps: string[] = []
 
-    const skillContents: string[] = []
-    const availableComponents: string[] = []
-
-    for (const { dir, type } of scanDirs) {
-      if (!existsSync(dir)) continue
-      const entries = readdirSync(dir, { withFileTypes: true })
-      
-      for (const entry of entries) {
-        let skillFilePath = ''
-        let skillName = ''
-        
-        if (entry.isFile() && entry.name.endsWith('.md')) {
-          // Native flat .md skill/agent/command
-          skillFilePath = join(dir, entry.name)
-          skillName = entry.name.replace(/\.md$/, '')
-        } else if (entry.isDirectory()) {
-          // ECC-style subdirectory (check for SKILL.md or AGENT.md etc)
-          const subFiles = readdirSync(join(dir, entry.name))
-          const targetFile = subFiles.find(f => f.toLowerCase() === 'skill.md' || f.toLowerCase() === 'agent.md' || f.toLowerCase() === 'command.md')
-          if (targetFile) {
-            skillFilePath = join(dir, entry.name, targetFile)
-            skillName = entry.name
-          }
-        }
-
-        if (!skillFilePath || disabledSet.has(skillFilePath)) continue
-
-        try {
-          const raw = readFileSync(skillFilePath, 'utf-8')
-          // Parse frontmatter
-          const fmMatch = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/)
-          let trigger = (type === 'skill') ? 'auto' : 'manual' // Default to auto for skills, manual for agents/cmds
-          let content = raw
-          let name = skillName
-          
-          if (fmMatch) {
-            const fm = fmMatch[1]
-            content = fmMatch[2]
-            const trigMatch = fm.match(/trigger:\s*(.+)/)
-            const nameMatch = fm.match(/name:\s*(.+)/)
-            if (trigMatch) trigger = trigMatch[1].trim()
-            if (nameMatch) name = nameMatch[1].trim()
-          }
-
-          // Auto-trigger skills go directly into the prompt
-          if (trigger === 'auto' || trigger === 'always') {
-            skillContents.push(`<skill name="${name}" type="${type}">\n${content.trim()}\n</skill>`)
-          } else {
-            // Log as available capability
-            availableComponents.push(`${type}: ${name}`)
-          }
-        } catch {}
+    for (const res of resources) {
+      if (!res.active) continue
+      if (res.trigger === 'auto' || res.trigger === 'always') {
+        activeSkills.push(`<skill name="${res.name}" type="${res.type}">\n${res.content}\n</skill>`)
+      } else {
+        availableCaps.push(`/${res.name} (${res.type}): ${res.description}`)
       }
     }
 
-    if (skillContents.length > 0) {
-      systemContent += `\n\n<active_skills>\n${skillContents.join('\n')}\n</active_skills>`
+    if (activeSkills.length > 0) {
+      systemContent += `\n\n<active_skills>\n${activeSkills.join('\n')}\n</active_skills>`
     }
-    if (availableComponents.length > 0) {
-      systemContent += `\n\n<available_capabilities>\nYou have access to the following project-specific components (trigger them if relevant or mention to user):\n${availableComponents.join(', ')}\n</available_capabilities>`
+    if (availableCaps.length > 0) {
+      systemContent += `\n\n<available_capabilities>\n以下是项目中已启用的扩展指令和技能。如果用户输入匹配其中一个名称（无论是否带斜杠），你可以调用对应的逻辑或根据其描述提供帮助：\n${availableCaps.join('\n')}\n</available_capabilities>`
     }
-  } catch { /* ignore skill injection errors */ }
+  } catch {}
 
-  // ── 斜杠命令识别 (Slash command recognition) ──
+  // ── 增强型指令解析 (Enhanced Command Resolution) ──
   let userMessage = body.message
   if (userMessage.startsWith('/')) {
     const cmdName = userMessage.slice(1).split(/\s/)[0]
-    const cmdDirs = [
-      join(workingDirectory, '.claude', 'commands'),
-      join(process.env.HOME || '~', '.claude', 'commands'),
-    ]
-    for (const dir of cmdDirs) {
-      const cmdPath = join(dir, `${cmdName}.md`)
-      if (existsSync(cmdPath)) {
-        const cmdContent = readFileSync(cmdPath, 'utf-8')
-        // Replace the /command with the actual command content + any extra args
-        const extraArgs = userMessage.slice(1 + cmdName.length).trim()
-        userMessage = cmdContent + (extraArgs ? `\n\n额外指令: ${extraArgs}` : '')
-        break
-      }
+    const resources = discoverResources()
+    // Find best match in Skills, Agents or Commands (case-insensitive)
+    const found = resources.find(r => r.active && r.name.toLowerCase() === cmdName.toLowerCase())
+    if (found) {
+      const extraArgs = userMessage.slice(1 + cmdName.length).trim()
+      userMessage = found.content + (extraArgs ? `\n\n额外指令: ${extraArgs}` : '')
     }
   }
 

@@ -130,11 +130,16 @@ export async function openaiChatCompletionStream(
     throw new Error(`${config.displayName} does not support streaming`)
   }
 
+  // stream_options is an OpenAI-specific extension — only send for providers
+  // that support it. Other providers (MiniMax, DeepSeek, Gemini, etc.) may
+  // return 400 when encountering this unknown parameter.
+  const supportsStreamOptions = config.provider === 'OpenAI'
+
   const body: OpenAIChatRequest = {
     ...request,
     model: config.modelId,
     stream: true,
-    stream_options: { include_usage: true },
+    ...(supportsStreamOptions ? { stream_options: { include_usage: true } } : {}),
   }
 
   // Anthropic needs special request format + URL

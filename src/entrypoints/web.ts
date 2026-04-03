@@ -2503,11 +2503,15 @@ async function handleChat(
     `10. 不要重复用户的问题，不要输出冗余的"让我来..."、"好的我会..."等过渡语。直接给出答案或执行操作。`,
   ].join('\n')
 
-  // Inject CLAUDE.md context if available
+  // Inject CLAUDE.md context if available (capped to avoid context overflow)
+  const MAX_CLAUDE_MD_CHARS = 4000
   const claudeMdPath = join(workingDirectory, 'CLAUDE.md')
   if (existsSync(claudeMdPath)) {
     try {
-      const claudeMd = readFileSync(claudeMdPath, 'utf-8')
+      let claudeMd = readFileSync(claudeMdPath, 'utf-8')
+      if (claudeMd.length > MAX_CLAUDE_MD_CHARS) {
+        claudeMd = claudeMd.slice(0, MAX_CLAUDE_MD_CHARS) + '\n...(截断)'
+      }
       systemContent += `\n\n<project_context>\n${claudeMd}\n</project_context>`
     } catch { /* ignore */ }
   }
@@ -2525,25 +2529,22 @@ async function handleChat(
   }
 
   // ── 统一组件发现与注入 (Unified Component Discovery & Injection) ──
+  // NOTE: Only inject summaries to avoid bloating the system prompt.
+  // Full skill content can be 100KB+, which exceeds some providers' limits.
+  const MAX_SKILL_INJECT_CHARS = 4000
   try {
     const resources = discoverResources()
-    const activeSkills: string[] = []
     const availableCaps: string[] = []
 
     for (const res of resources) {
       if (!res.active) continue
-      if (res.trigger === 'auto' || res.trigger === 'always') {
-        activeSkills.push(`<skill name="${res.name}" type="${res.type}">\n${res.content}\n</skill>`)
-      } else {
-        availableCaps.push(`/${res.name} (${res.type}): ${res.description}`)
-      }
+      // Always use summary mode — full content injection bloats the prompt
+      availableCaps.push(`/${res.name} (${res.type}): ${res.description}`)
     }
 
-    if (activeSkills.length > 0) {
-      systemContent += `\n\n<active_skills>\n${activeSkills.join('\n')}\n</active_skills>`
-    }
     if (availableCaps.length > 0) {
-      systemContent += `\n\n<available_capabilities>\n以下是项目中已启用的扩展指令和技能。如果用户输入匹配其中一个名称（无论是否带斜杠），你可以调用对应的逻辑或根据其描述提供帮助：\n${availableCaps.join('\n')}\n</available_capabilities>`
+      const capsText = availableCaps.join('\n').slice(0, MAX_SKILL_INJECT_CHARS)
+      systemContent += `\n\n<available_capabilities>\n以下是项目中已启用的扩展指令和技能。如果用户输入匹配其中一个名称（无论是否带斜杠），你可以调用对应的逻辑或根据其描述提供帮助：\n${capsText}\n</available_capabilities>`
     }
   } catch {}
 
@@ -2672,8 +2673,10 @@ ${toolDescriptions}
               { modelKey, signal: req.signal },
             )
 
+
             if (!response.ok) {
               const errorText = await response.text()
+
               send({ type: 'error', message: `API 错误 (${response.status}): ${errorText}` })
               break
             }
@@ -2683,6 +2686,7 @@ ${toolDescriptions}
               send({ type: 'error', message: '无响应体' })
               break
             }
+
 
             // Parse the SSE stream, accumulating text and tool_calls
             const decoder = new TextDecoder()
@@ -2710,6 +2714,14 @@ ${toolDescriptions}
 
                 try {
                   const chunk = JSON.parse(data)
+
+                  // DEBUG: detect non-standard error responses
+                  if (chunk.type === 'error' || chunk.error) {
+                    const errMsg = chunk.error?.message || chunk.message || JSON.stringify(chunk)
+                    send({ type: 'error', message: `API 流式错误: ${errMsg}` })
+                    continue
+                  }
+
                   const choice = chunk.choices?.[0]
                   const delta = choice?.delta
                   if (!delta) continue
@@ -2734,11 +2746,13 @@ ${toolDescriptions}
                           thinkBuffer = thinkBuffer.slice(closeIdx + 8)
                           insideThinking = false
                         } else {
-                          // Still inside thinking — send buffered content as thinking
-                          if (thinkBuffer.length > 0) {
-                            send({ type: 'thinking', text: thinkBuffer })
+                          // Still inside thinking — keep last 8 chars to guard
+                          // against </think> being split across chunks
+                          if (thinkBuffer.length > 8) {
+                            const safe = thinkBuffer.slice(0, -8)
+                            send({ type: 'thinking', text: safe })
+                            thinkBuffer = thinkBuffer.slice(-8)
                           }
-                          thinkBuffer = ''
                           break
                         }
                       } else {
@@ -2752,7 +2766,7 @@ ${toolDescriptions}
                           thinkBuffer = thinkBuffer.slice(openIdx + 7)
                           insideThinking = true
                         } else {
-                          // Check for partial </think> at end of buffer
+                          // Keep last 7 chars to guard against partial <think>
                           if (thinkBuffer.length > 7) {
                             const safe = thinkBuffer.slice(0, -7)
                             assistantContent += safe
@@ -2794,10 +2808,17 @@ ${toolDescriptions}
               }
             }
 
-            // Flush remaining text buffer
-            if (thinkBuffer && !insideThinking) {
-              assistantContent += thinkBuffer
-              send({ type: 'text', text: thinkBuffer })
+            // Flush remaining text buffer — ALWAYS flush, even if
+            // insideThinking is true (e.g. model forgot </think>)
+            if (thinkBuffer) {
+              if (insideThinking) {
+                // Residual thinking content — send as thinking, not as visible text
+                send({ type: 'thinking', text: thinkBuffer })
+              } else {
+                assistantContent += thinkBuffer
+                send({ type: 'text', text: thinkBuffer })
+              }
+              thinkBuffer = ''
             }
 
             reader.releaseLock()

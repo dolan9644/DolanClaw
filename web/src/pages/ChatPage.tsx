@@ -1181,11 +1181,16 @@ export function ChatPage({ currentModel, onOpenFile }: ChatPageProps) {
         return
       }
 
+      // Only intercept built-in slash commands that have local handlers.
+      // Dynamic commands (skills/agents/commands from backend) should be
+      // sent to the backend as regular messages for server-side resolution.
+      const builtinNames = new Set(SLASH_COMMANDS.map(c => c.name))
       const matched = allSlashCommands.find(c => text.startsWith(c.name))
-      if (matched) {
+      if (matched && builtinNames.has(matched.name)) {
         selectSlashCommand(matched)
         return
       }
+      // Dynamic commands fall through to be sent as regular messages
     }
 
     const userMsg: Message = {

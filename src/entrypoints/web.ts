@@ -126,6 +126,43 @@ function parseResourceFile(filePath: string, raw: string, source: 'project' | 'u
   }
 }
 
+/**
+ * Sanitizes and transforms message history for maximum OpenAI API compatibility.
+ * 1. Ensures 'content' is never null (replaces with empty string).
+ * 2. Splits assistant messages with BOTH text and tool_calls into two sequential messages.
+ * 3. Standardizes tool_calls formats.
+ */
+function sanitizeOpenAIMessages(messages: any[]): OpenAIChatMessage[] {
+  return (messages || []).flatMap((m): OpenAIChatMessage[] => {
+    const content = m.content || ''
+    if (m.role === 'tool' && m.tool_call_id) {
+      return [{
+        role: 'tool' as const,
+        content,
+        tool_call_id: m.tool_call_id,
+      }]
+    }
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+      const tcs = m.tool_calls.map((tc: any) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: { name: tc.function.name, arguments: tc.function.arguments },
+      }))
+      if (content.trim()) {
+        return [
+          { role: 'assistant' as const, content },
+          { role: 'assistant' as const, content: '', tool_calls: tcs },
+        ]
+      }
+      return [{ role: 'assistant' as const, content: '', tool_calls: tcs }]
+    }
+    return [{
+      role: m.role as 'user' | 'assistant' | 'system',
+      content,
+    } as OpenAIChatMessage]
+  })
+}
+
 function discoverResources(): DiscoveredResource[] {
   const resources: DiscoveredResource[] = []
   const scanDirs = [
@@ -2303,21 +2340,7 @@ async function handleApiRequest(
         for (let iteration = 0; iteration < 10; iteration++) {
           const response = await openaiChatCompletion({
             model: config.modelId,
-            messages: agentMessages.map(m => {
-              if (m.role === 'tool') return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id || '' }
-              if (m.role === 'assistant' && m.tool_calls) {
-                return {
-                  role: 'assistant' as const,
-                  content: m.content || null,
-                  tool_calls: m.tool_calls.map(tc => ({
-                    id: tc.id,
-                    type: 'function' as const,
-                    function: { name: tc.function.name, arguments: tc.function.arguments },
-                  })),
-                }
-              }
-              return { role: m.role as 'system' | 'user' | 'assistant', content: m.content }
-            }),
+            messages: sanitizeOpenAIMessages(agentMessages),
             max_tokens: Math.min(config.maxOutputTokens, 8192),
             tools: allAgentTools.length > 0 ? allAgentTools : undefined,
           }, { modelKey: agent.config.model })
@@ -2333,15 +2356,28 @@ async function handleApiRequest(
             break
           }
 
-          agentMessages.push({
-            role: 'assistant',
-            content: assistantMsg.content || '',
-            tool_calls: assistantMsg.tool_calls.map(tc => ({
-              id: tc.id,
-              type: 'function' as const,
-              function: { name: tc.function.name, arguments: tc.function.arguments },
-            })),
-          })
+          if (assistantMsg.content && assistantMsg.content.trim() && assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+            agentMessages.push({ role: 'assistant', content: assistantMsg.content.trim() })
+            agentMessages.push({
+              role: 'assistant',
+              content: '',
+              tool_calls: assistantMsg.tool_calls.map(tc => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.function.name, arguments: tc.function.arguments },
+              })),
+            })
+          } else {
+            agentMessages.push({
+              role: 'assistant',
+              content: assistantMsg.content || '',
+              tool_calls: assistantMsg.tool_calls ? assistantMsg.tool_calls.map(tc => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.function.name, arguments: tc.function.arguments },
+              })) : undefined,
+            })
+          }
 
           for (const tc of assistantMsg.tool_calls) {
             try {
@@ -2526,32 +2562,11 @@ async function handleChat(
 
   // Build initial conversation history (mutable — tool results are appended)
   const conversationMessages: OpenAIChatMessage[] = [
-    { role: 'system', content: systemContent },
-    ...(body.messages || []).map(m => {
-      if (m.role === 'tool' && m.tool_call_id) {
-        return {
-          role: 'tool' as const,
-          content: m.content,
-          tool_call_id: m.tool_call_id,
-        }
-      }
-      if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
-        return {
-          role: 'assistant' as const,
-          content: m.content || null,
-          tool_calls: m.tool_calls.map(tc => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          })),
-        }
-      }
-      return {
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }
-    }),
-    { role: 'user', content: userMessage },
+    ...sanitizeOpenAIMessages([
+      { role: 'system', content: systemContent },
+      ...(body.messages || []),
+      { role: 'user', content: userMessage || '' },
+    ]),
   ]
 
   // Only pass tools if NOT in plan mode AND model supports tool_calls
@@ -2737,6 +2752,7 @@ ${toolDescriptions}
                           thinkBuffer = thinkBuffer.slice(openIdx + 7)
                           insideThinking = true
                         } else {
+                          // Check for partial </think> at end of buffer
                           if (thinkBuffer.length > 7) {
                             const safe = thinkBuffer.slice(0, -7)
                             assistantContent += safe
@@ -2896,13 +2912,24 @@ ${toolDescriptions}
               content: assistantContent || '',
             })
           } else {
-            // For native tool calls: include the tool_calls array
-            const assistantMsg: OpenAIChatMessage = {
-              role: 'assistant',
-              content: assistantContent || null,
-              tool_calls: toolCallsFromLLM,
+            // For native tool calls: split if mixed content, ensure non-null
+            if (assistantContent && assistantContent.trim() && toolCallsFromLLM.length > 0) {
+              conversationMessages.push({
+                role: 'assistant',
+                content: assistantContent.trim(),
+              })
+              conversationMessages.push({
+                role: 'assistant',
+                content: '',
+                tool_calls: toolCallsFromLLM,
+              })
+            } else {
+              conversationMessages.push({
+                role: 'assistant',
+                content: assistantContent || '',
+                tool_calls: toolCallsFromLLM.length > 0 ? toolCallsFromLLM : undefined,
+              })
             }
-            conversationMessages.push(assistantMsg)
           }
 
           // ── Step 3: Execute each tool call ──────────────────
